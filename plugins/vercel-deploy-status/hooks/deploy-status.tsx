@@ -78,6 +78,12 @@ export const register: Register = (on, options) => {
 
     const shown = rows.slice(0, maxRows)
     const hidden = rows.length - shown.length
+    // Other mods' bands, drawn under this one with the rows this one leaves.
+    // A band below that fails must not take this one with it.
+    let below = null
+    try {
+      below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - (3 + shown.length)) } })
+    } catch {}
 
     // Two JSX rules of this runtime, learned the hard way: a `.map()` array
     // is not a valid Box child, so it is wrapped in a Fragment; and `key` is
@@ -107,6 +113,7 @@ export const register: Register = (on, options) => {
           })}
         </>
         {hidden > 0 ? <Text dimColor>{`  … and ${plural(hidden, 'more')}`}</Text> : <Text>{''}</Text>}
+        {below ?? <Text>{''}</Text>}
       </Box>
     )
   })

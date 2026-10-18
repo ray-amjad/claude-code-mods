@@ -150,3 +150,22 @@ test('interactive session starts the timer and the command', async ($, on) => {
   expect(timers).toBe(1)
   expect(commands).toBe(1)
 })
+
+// classic.SessionStart fires before session.start, so it must not read the
+// transcript itself: in a headless session that read is a wasted tail/PowerShell spawn
+for (const isInteractive of [false, true]) {
+  test(`${isInteractive ? 'interactive' : 'headless'} session ${isInteractive ? 'reads' : 'never reads'} the transcript at start`, async ($: any, on) => {
+    mock.store(on, {})
+    mock.env(on, {})
+    on('session.start', (_$, e) => ({ cwd: e.cwd }))
+    on('clock.every', () => ({ value: undefined }) as never)
+    on('clock.now', () => ({ value: 1_000_000 }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    let runs = 0
+    on('process.run', () => { runs += 1; return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
+    on('classic.SessionStart', () => ({}) as never)
+    await $.classic.SessionStart({ transcript_path: '/nowhere/t.jsonl' })
+    await $.session.start({ cwd: '/nowhere', surface: 'terminal', isInteractive })
+    expect(runs).toBe(isInteractive ? 1 : 0)
+  })
+}

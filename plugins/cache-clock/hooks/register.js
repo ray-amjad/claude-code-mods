@@ -192,6 +192,8 @@ export function register(on, options) {
     headless = e.isInteractive === false
     if (headless) return next(e)
     await loadConfig($, options)
+    // classic.SessionStart fires before this, so the transcript path is known: read the TTL here
+    await readTtl($).catch(() => undefined)
     context = (await $.session.usage()).context
     await $.command.register({ name: 'cache-clock', description: 'Print the cache countdown and context use' })
     $.clock.every(1000, () => tick($))
@@ -199,11 +201,11 @@ export function register(on, options) {
   })
 
   // On a resume, the session tells us how long ago the last answer was,
-  // so the clock picks up where it left off
+  // so the clock picks up where it left off. This fires before session.start, so
+  // it can't tell a headless session yet: session.start does the TTL read.
   on('classic.SessionStart', async ($, e, next) => {
     transcript = e.transcript_path ?? transcript
     if (e.seconds_since_last_response != null) mainAt = (await $.clock.now()) - e.seconds_since_last_response * 1000
-    if (!headless) await readTtl($)
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e))) // never block the session on our error
 

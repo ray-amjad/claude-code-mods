@@ -14,7 +14,7 @@
       "name": "cache-clock",
       "source": "./plugins/cache-clock",
       "description": "A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "author": {
         "name": "Ray Amjad"
       },
@@ -104,7 +104,7 @@
       "name": "vercel-deploy-status",
       "source": "./plugins/vercel-deploy-status",
       "description": "Pins the Vercel deploy queue of the linked project under the prompt: every deploy queued, building or just finished, with its phase and elapsed time",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": {
         "name": "Ray Amjad"
       },

@@ -1,6 +1,6 @@
 {
   "name": "cache-clock",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold",
   "author": {
     "name": "Ray Amjad",

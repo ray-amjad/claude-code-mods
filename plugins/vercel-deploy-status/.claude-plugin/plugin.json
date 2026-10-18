@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "vercel-deploy-status",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Pins the Vercel deploy queue of the linked project under the prompt: every deploy queued, building or just finished, with its phase and elapsed time",
   "author": {
     "name": "Ray Amjad"
