@@ -48,8 +48,10 @@ export function register(on, options) {
         'Ask the user for a secret (API key, token, password) without it ever entering the conversation. ' +
         'The user pastes it into a masked box and the mod saves it to the project .env (or the env file named ' +
         'in `file`, such as .env.local). You get back the ' +
-        'variable name and a placeholder like [REDACTED-SECRET-1a2b3c4d]. Write that placeholder in a command ' +
-        'or file and it becomes the real value when the tool runs. Use this INSTEAD of asking the user to ' +
+        'variable name, the absolute path of the file it was saved to, and a placeholder like ' +
+        '[REDACTED-SECRET-1a2b3c4d]. Prefer code that reads the variable from that file. A placeholder written ' +
+        'in a command or file becomes the real value when the tool runs, but a command that sends it off the ' +
+        'machine can be refused by the permission check. Use this INSTEAD of asking the user to ' +
         'paste a secret into chat.',
       inputSchema: {
         type: 'object',
@@ -143,11 +145,18 @@ export function register(on, options) {
     if (!value) return { result: `The user cancelled. ${name} was not saved.` }
 
     try {
-      const where = await saveToDotenv($, await $.session.cwd(), file, name, value)
+      // The project root, not the shell's working directory: after a `cd` into a
+      // source folder (an Xcode app folder, a src/ that is bundled whole) the key
+      // would end up inside the shipped product.
+      const dir = (await $.session.root().catch(() => '')) || await $.session.cwd()
+      const where = await saveToDotenv($, dir, file, name, value)
       const tag = keepSecret(value)
       $.ui.toast(`${name} saved to ${where}`)
       // The ONLY things Claude learns: the name, the place, and a placeholder
-      return { result: `The user entered ${name}. It was saved to ${where}. You can't see the value. To use it in a command or a file, write ${tag}: it becomes the real value when the tool runs and is hidden again in the output. Code should read it from the environment.` }
+      // The safe way first: a placeholder in a command that leaves the machine
+      // (more so with the sandbox off) can be refused as credential leakage,
+      // while code that reads the file passes.
+      return { result: `The user entered ${name}. It was saved to ${where}. You can't see the value. To use it, prefer code that reads ${name} from that file (or from the environment once the file is loaded). As a fallback, write ${tag} in a command or a file: it becomes the real value when the tool runs and is hidden again in the output. A command that sends the placeholder off the machine, especially with the sandbox disabled, may be refused by the permission check.` }
     } catch (err) {
       return { result: `Saving ${name} failed: ${String(err && err.message || err).slice(0, 300)}` }
     }
@@ -325,7 +334,7 @@ async function saveToDotenv($, cwd, file, name, value) {
   if (at >= 0) lines[at] = line
   else lines.push(line)
   await $.fs.write(path, lines.join('\n') + '\n')
-  return file + (isIgnored ? '' : ` (and added ${file} to .gitignore)`)
+  return path + (isIgnored ? '' : ` (and added ${file} to ${gi})`)
 }
 
 // Whether git already ignores the file (any pattern, e.g. `.env*.local`).

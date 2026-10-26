@@ -12,7 +12,7 @@ const ask = async ($: any, input: Record<string, unknown>) =>
 // `git` answers check-ignore with `ignoredExit` and ls-files with
 // `trackedExit` (1: not tracked). Each pause calls `onPause(n)`, where a test
 // plays the person.
-function host(on: any, opts: { ignoredExit?: number; trackedExit?: number; noPause?: boolean; onPause?: (n: number) => Promise<void> } = {}) {
+function host(on: any, opts: { ignoredExit?: number; trackedExit?: number; noPause?: boolean; root?: string; onPause?: (n: number) => Promise<void> } = {}) {
   const files: Record<string, string> = {}
   // The engine hands paths in the host's own form (C:\repo\.env on Windows)
   const key = (p: string) => p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
@@ -21,6 +21,8 @@ function host(on: any, opts: { ignoredExit?: number; trackedExit?: number; noPau
   on('env.get', () => ({ value: 'Linux' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.cwd', () => ({ value: '/repo' }))
+  // The project root; a test moves it away from the cwd with `root`
+  on('session.root', () => ({ value: opts.root ?? '/repo' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
@@ -61,16 +63,24 @@ async function typeAndSave($: any, text: string) {
 test('the box saves to .env and answers with a placeholder', async ($, on) => {
   const h = host(on, { onPause: (n) => (n === 1 ? typeAndSave($, DUMMY) : Promise.resolve()) })
   const r = await ask($, { name: 'DUMMY_KEY' });
-  expect(String(r.result)).toMatch(/saved to \.env/)
+  expect(String(r.result)).toMatch(/saved to \/repo\/\.env/)
   expect(String(r.result)).toMatch(/\[REDACTED-SECRET-[0-9a-f]{8}\]/)
   expect(String(r.result)).not.toContain(DUMMY)
   expect(h.files['/repo/.env']).toBe(`DUMMY_KEY=${DUMMY}\n`)
 })
 
+test('the key goes to the project root, not to the folder the shell has cd-ed into', async ($, on) => {
+  const h = host(on, { root: '/proj', onPause: (n) => (n === 1 ? typeAndSave($, DUMMY) : Promise.resolve()) })
+  const r = await ask($, { name: 'DUMMY_KEY' })
+  expect(String(r.result)).toMatch(/saved to \/proj\/\.env/)
+  expect(h.files['/proj/.env']).toBe(`DUMMY_KEY=${DUMMY}\n`)
+  expect(h.files['/repo/.env']).toBe(undefined)
+})
+
 test('file: .env.local is written and added to .gitignore when git does not ignore it', async ($, on) => {
   const h = host(on, { ignoredExit: 1, onPause: (n) => (n === 1 ? typeAndSave($, DUMMY) : Promise.resolve()) })
   const r = await ask($, { name: 'DUMMY_KEY', file: '.env.local' })
-  expect(String(r.result)).toMatch(/saved to \.env\.local \(and added \.env\.local to \.gitignore\)/)
+  expect(String(r.result)).toMatch(/saved to \/repo\/\.env\.local \(and added \.env\.local to \/repo\/\.gitignore\)/)
   expect(h.files['/repo/.env.local']).toBe(`DUMMY_KEY=${DUMMY}\n`)
   expect(h.files['/repo/.env']).toBe(undefined)
   expect(h.files['/repo/.gitignore']).toBe('.env.local\n')
@@ -108,7 +118,7 @@ test('a box nobody answers times out, and the next request opens a new one', asy
   // Pause 1 jumps past the deadline: A_KEY times out. Pause 2 is B_KEY's box: the person saves.
   const h = host(on, { onPause: async (n) => (n === 1 ? void h.advance(11 * 60_000) : typeAndSave($, DUMMY)) })
   expect(String((await ask($, { name: 'A_KEY' })).result)).toMatch(/cancelled/)
-  expect(String((await ask($, { name: 'B_KEY' })).result)).toMatch(/saved to .env/)
+  expect(String((await ask($, { name: 'B_KEY' })).result)).toMatch(/saved to \/repo\/\.env/)
   expect(h.files['/repo/.env']).toBe(`B_KEY=${DUMMY}
 `)
 })
@@ -126,7 +136,7 @@ test('a stalled request that wakes after a newer one only lets go of its own', a
     },
   })
   const a = await ask($, { name: 'A_KEY' })
-  expect(String(b?.result)).toMatch(/B_KEY\. It was saved to \.env/)
+  expect(String(b?.result)).toMatch(/B_KEY\. It was saved to \/repo\/\.env/)
   expect(String(a.result)).toMatch(/cancelled\. A_KEY was not saved/)
   expect(h.files['/repo/.env']).toBe(`B_KEY=${DUMMY}\n`)
 })
