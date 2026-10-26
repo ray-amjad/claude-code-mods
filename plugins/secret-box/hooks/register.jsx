@@ -249,16 +249,23 @@ function gitDirs(cmd) {
   return [...dirs]
 }
 
+// Whether the command runs `git` as a command (at the start, after ; & | ( ` $(
+// a quote or a newline, through sudo, env or a path), with its global options,
+// then one of `subs`: not the same words inside a URL, a file name or an argument
+function gitRuns(cmd, subs) {
+  return new RegExp(String.raw`(?:^|[;&|(\x60\n'"]|\$\()\s*(?:(?:sudo|command|env)\s+(?:\w+=\S*\s+)*)?(?:\S*\/)?git(?:\s+(?:-c\s+\S+|-C\s+(?:"[^"]*"|'[^']*'|\S+)|--[\w-]+(?:=\S+)?|-[pP]))*\s+(?:${subs})\b`).test(cmd)
+}
+
 // Why a Bash command must be blocked: it stages or commits a .env file
 async function commitBlockReason($, cmd) {
-  if (/\bgit\b[^;&|]*\badd\b/.test(cmd) && /\.env\b(?!\.(example|sample|template|dist))/.test(cmd)) {
+  if (gitRuns(cmd, 'add|stage') && /\.env\b(?!\.(example|sample|template|dist))/.test(cmd)) {
     return 'staging a .env file is blocked.'
   }
-  if (!/\bgit\b[^;&|]*\bcommit\b/.test(cmd)) return ''
+  if (!gitRuns(cmd, 'commit')) return ''
   // The index is read before the command runs. If the same command stages
   // (git add ... && git commit, or commit -a), count what it could stage too:
   // every changed or untracked file git does not ignore.
-  const stages = /\bgit\b[^;&|]*\b(add|stage)\b/.test(cmd) || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
+  const stages = gitRuns(cmd, 'add|stage') || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
   for (const dir of gitDirs(cmd)) {
     const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])
     const checks = [git('diff', '--cached', '--name-only')]

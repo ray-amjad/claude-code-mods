@@ -165,6 +165,20 @@ test('a commit is blocked when git cannot say what it includes', async ($, on) =
   expect(Boolean((await call($, { tool: 'Bash', command: 'git commit -m wip' })).deny)).toBe(true)
 })
 
+// Only git run as a command counts: the same words in a URL, a file name or an argument do not
+for (const [name, command, isBlocked] of [
+  ['the Git Data API with a commit.json file', 'gh api repos/o/r/git/trees --input "$S/commit.json"', false],
+  ['git log searching for commit', 'git log --grep commit', false],
+  ['bash -c running git commit', "bash -c 'git commit -m wip'", true],
+  ['git commit after a newline', 'x=1\ngit commit -m wip', true],
+  ['env and a path before git commit', 'env GIT_EDITOR=true /usr/bin/git commit', true],
+] as const) {
+  test(name, async ($, on) => {
+    gitStub(on, { fails: true })
+    expect(Boolean((await call($, { tool: 'Bash', command })).deny)).toBe(isBlocked)
+  })
+}
+
 test('a Windows .env path is read where it is, and its weak values are hidden', async ($, on) => {
   const plain = 'staple' + 'gunwindow' // letters only: no detector rule fires on it
   const looked: string[] = []

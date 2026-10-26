@@ -1,6 +1,6 @@
 {
   "name": "secret-box",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Claude can use a secret without seeing it: a masked box saves keys to .env and gives Claude a placeholder, every key a tool prints comes back as a placeholder, and committing .env is refused",
   "author": {
     "name": "Ray Amjad",
