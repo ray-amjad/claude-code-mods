@@ -260,16 +260,22 @@ function gitDirs(cmd) {
 
 // Whether the command runs `git` as a command, then one of `subs`: not the
 // same words inside a URL, a file name or an argument. git may follow ; & | (
-// { ! ` $( a quote or a newline, then VAR=x assignments and wrappers (then, do,
-// time, nohup, exec, xargs, sudo -u x, env ...), as git, git.exe or a path to it,
-// then its global options (-c x, -C dir, --git-dir dir, --no-pager ...).
+// { ! ` $( a quote or a newline, then VAR=x assignments, if/then/do/while ...
+// and wrappers with their options (sudo -u x --, env -i, xargs -0, time ...),
+// as git, git.exe or a path to it, then its global options (-c x, -C dir,
+// --git-dir dir, --no-pager ...).
 // A miss lets a .env commit through, so when unsure this matches.
-const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`
+const ARG = String.raw`(?:"[^"]*"|'[^']*'|[^\s-]\S*)`
+// Wrapper options that take a value (sudo -u x, env -u X, xargs -I {} ...).
+// Each token has one reading only, so a long command can't make the regex backtrack.
+const VALUE_OPTS = 'ugCDhprtUSadEILnPs'
 function gitRuns(cmd, subs) {
   const start = String.raw`(?:^|[;&|(\x60\n'"{!]|\$\()\s*`
-  const wrap = String.raw`(?:(?:\w+=${ARG}|then|do|else|elif|time|nohup|exec|xargs|nice|command|env|sudo(?:\s+-\w+(?:\s+\w+)?)*|!|\{)\s+)*`
+  const option = String.raw`(?:-[${VALUE_OPTS}]\s+[^\s;&|]+|-(?![${VALUE_OPTS}](?:\s|$))\S*)`
+  const wrap = String.raw`(?:(?:\w+=${ARG}|if|then|do|else|elif|while|until|(?:time|nohup|exec|xargs|nice|command|env|sudo)(?:\s+${option})*|!|\{)\s+)*`
   const git = String.raw`(?:"[^"]*[\/\\]git(?:\.exe)?"|'[^']*[\/\\]git(?:\.exe)?'|(?:[^\s"';&|]*[\/\\])?git(?:\.exe)?)`
-  const opts = String.raw`(?:\s+(?:-[cC]\s+${ARG}|--(?:git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(?:=|\s+)${ARG}|--[\w-]+(?:=\S+)?|-[pP]))*`
+  const long = 'git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
+  const opts = String.raw`(?:\s+(?:-[cC]\s*${ARG}|--(?:${long})(?:=|\s+)${ARG}|--(?!(?:${long})\b)[\w-]+(?:=\S+)?|-[pP]))*`
   return new RegExp(`${start}${wrap}${git}${opts}\\s+(?:${subs})\\b`).test(cmd)
 }
 

@@ -41,10 +41,20 @@ for (const [name, command, isBlocked] of GUARD) {
   })
 }
 
+// Every token has one reading: a regex with two readings per token never
+// returns on this (2^75 paths) and the test times out
+test('a long command of repeated wrappers and options is checked at once', async ($, on) => {
+  gitStub(on, {})
+  const command = 'env -- '.repeat(25) + 'env -u env '.repeat(25) + 'git ' + '-c -c '.repeat(25) + 'log'
+  expect(Boolean((await call($, { tool: 'Bash', command })).deny)).toBe(false)
+})
+
 // git add of a .env is refused on the words alone, with the same reach
 for (const [name, command, isBlocked] of [
   ['an inline variable before git add .env', 'GIT_TRACE=0 git add -f .env', true],
   ['git add .env after then', 'if true; then git add .env; fi', true],
+  ['xargs -0 running git add on .env', "printf '%s\\0' .env | xargs -0 git add", true],
+  ['git add .env in a while loop', 'while git add .env; do :; done', true],
   ['an echo that mentions add and .env', 'echo add .env', false],
 ] as const) {
   test(name, async ($, on) => {
@@ -199,6 +209,9 @@ for (const [name, command, isBlocked] of [
   ['sudo -u before git commit', 'sudo -u bob git commit -m wip', true],
   ['--git-dir with a space before commit', 'git --git-dir .git commit -m wip', true],
   ['a quoted -c value before commit', 'git -c "user.name=A B" commit -m wip', true],
+  ['git commit as an if condition', 'if git commit -m wip; then :; fi', true],
+  ['wrapper options before git commit', 'env -i sudo -u bob -- git commit -m wip', true],
+  ['-c and -C with no space', 'git -cuser.name=x -C. commit -m wip', true],
 ] as const) {
   test(name, async ($, on) => {
     gitStub(on, { fails: true })
