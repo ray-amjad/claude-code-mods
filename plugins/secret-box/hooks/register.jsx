@@ -321,12 +321,14 @@ async function saveToDotenv($, cwd, file, name, value) {
   if (tracked && tracked.exitCode === 0) throw new Error(`${file} is tracked by git, so a secret in it would be committed. Pick another file.`)
 
   // .gitignore first: if that write fails, the secret is never on disk un-ignored
-  const gi = cwd + '/.gitignore'
+  // C:\proj\.env on Windows, not C:\proj/.env: Claude may copy the path into a command
+  const sep = /^[A-Za-z]:\\|^\\\\/.test(cwd) ? '\\' : '/'
+  const gi = cwd + sep + '.gitignore'
   const ignore = (await $.fs.exists(gi)) ? await $.fs.read(gi) : ''
   const isIgnored = await gitIgnores($, cwd, file, ignore)
   if (!isIgnored) await $.fs.write(gi, ignore + (ignore && !ignore.endsWith('\n') ? '\n' : '') + file + '\n')
 
-  const path = cwd + '/' + file
+  const path = cwd + sep + file
   const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const line = `${name}=${quote(value)}`
   const lines = old.split('\n').filter((l, i, all) => !(i === all.length - 1 && l === ''))

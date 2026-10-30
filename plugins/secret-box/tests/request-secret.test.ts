@@ -77,6 +77,14 @@ test('the key goes to the project root, not to the folder the shell has cd-ed in
   expect(h.files['/repo/.env']).toBe(undefined)
 })
 
+test('a Windows project root gets a Windows path back, with no forward slash', async ($, on) => {
+  const h = host(on, { root: 'C:\\proj', onPause: (n) => (n === 1 ? typeAndSave($, DUMMY) : Promise.resolve()) })
+  const r = String((await ask($, { name: 'DUMMY_KEY' })).result)
+  expect(r).toContain('saved to C:\\proj\\.env (and added .env to C:\\proj\\.gitignore)')
+  // The engine may resolve C:\ paths its own way on Linux: match the end
+  expect(Object.keys(h.files).some(k => k.endsWith('proj/.env'))).toBe(true)
+})
+
 test('file: .env.local is written and added to .gitignore when git does not ignore it', async ($, on) => {
   const h = host(on, { ignoredExit: 1, onPause: (n) => (n === 1 ? typeAndSave($, DUMMY) : Promise.resolve()) })
   const r = await ask($, { name: 'DUMMY_KEY', file: '.env.local' })
