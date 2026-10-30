@@ -223,8 +223,10 @@ function gitDirs(cmd) {
 
 // Why a Bash command must be blocked: it stages or commits a .env file
 async function commitBlockReason($, cmd) {
-  if (/\bgit\b[^;&|]*\badd\b/.test(cmd) && /\.env\b(?!\.(example|sample|template|dist))/.test(cmd)) {
-    return 'staging a .env file is blocked.'
+  // Only `git [-c k=v] [-C dir] add|stage <args>` counts, and the .env must be an
+  // argument of that add (not `git worktree add`, not .env elsewhere in the command).
+  for (const m of cmd.matchAll(/\bgit(?:[ \t]+-c[ \t]+\S+|[ \t]+-C[ \t]+(?:"[^"]*"|'[^']*'|\S+))*[ \t]+(?:add|stage)\b([^;&|]*)/g)) {
+    if (/\.env\b(?!\.(example|sample|template|dist))/.test(m[1])) return 'staging a .env file is blocked.'
   }
   if (!/\bgit\b[^;&|]*\bcommit\b/.test(cmd)) return ''
   // The index is read before the command runs. If the same command stages
