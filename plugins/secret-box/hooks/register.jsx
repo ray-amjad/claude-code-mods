@@ -258,16 +258,37 @@ function gitDirs(cmd) {
   return [...dirs]
 }
 
+// Whether the command runs `git` as a command, then one of `subs`: not the
+// same words inside a URL, a file name or an argument. git may follow ; & | (
+// { ! ` $( a quote or a newline, then VAR=x assignments, if/then/do/while ...
+// and wrappers with their options (sudo -u x --, env -i, xargs -0, time ...),
+// as git, git.exe or a path to it, then its global options (-c x, -C dir,
+// --git-dir dir, --no-pager ...).
+// A miss lets a .env commit through, so when unsure this matches.
+const ARG = String.raw`(?:"[^"]*"|'[^']*'|[^\s-]\S*)`
+// Wrapper options that take a value (sudo -u x, env -u X, xargs -I {} ...).
+// Each token has one reading only, so a long command can't make the regex backtrack.
+const VALUE_OPTS = 'ugCDhprtUSadEILnPs'
+function gitRuns(cmd, subs) {
+  const start = String.raw`(?:^|[;&|(\x60\n'"{!]|\$\()\s*`
+  const option = String.raw`(?:-[${VALUE_OPTS}]\s+[^\s;&|]+|-(?![${VALUE_OPTS}](?:\s|$))\S*)`
+  const wrap = String.raw`(?:(?:\w+=${ARG}|if|then|do|else|elif|while|until|(?:time|nohup|exec|xargs|nice|command|env|sudo)(?:\s+${option})*|!|\{)\s+)*`
+  const git = String.raw`(?:"[^"]*[\/\\]git(?:\.exe)?"|'[^']*[\/\\]git(?:\.exe)?'|(?:[^\s"';&|]*[\/\\])?git(?:\.exe)?)`
+  const long = 'git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
+  const opts = String.raw`(?:\s+(?:-[cC]\s*${ARG}|--(?:${long})(?:=|\s+)${ARG}|--(?!(?:${long})\b)[\w-]+(?:=\S+)?|-[pP]))*`
+  return new RegExp(`${start}${wrap}${git}${opts}\\s+(?:${subs})\\b`).test(cmd)
+}
+
 // Why a Bash command must be blocked: it stages or commits a .env file
 async function commitBlockReason($, cmd) {
-  if (/\bgit\b[^;&|]*\badd\b/.test(cmd) && /\.env\b(?!\.(example|sample|template|dist))/.test(cmd)) {
+  if (gitRuns(cmd, 'add|stage') && /\.env\b(?!\.(example|sample|template|dist))/.test(cmd)) {
     return 'staging a .env file is blocked.'
   }
-  if (!/\bgit\b[^;&|]*\bcommit\b/.test(cmd)) return ''
+  if (!gitRuns(cmd, 'commit')) return ''
   // The index is read before the command runs. If the same command stages
   // (git add ... && git commit, or commit -a), count what it could stage too:
   // every changed or untracked file git does not ignore.
-  const stages = /\bgit\b[^;&|]*\b(add|stage)\b/.test(cmd) || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
+  const stages = gitRuns(cmd, 'add|stage') || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
   for (const dir of gitDirs(cmd)) {
     const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])
     const checks = [git('diff', '--cached', '--name-only')]

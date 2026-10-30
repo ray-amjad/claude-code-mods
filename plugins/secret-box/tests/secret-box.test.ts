@@ -41,6 +41,28 @@ for (const [name, command, isBlocked] of GUARD) {
   })
 }
 
+// Every token has one reading: a regex with two readings per token never
+// returns on this (2^75 paths) and the test times out
+test('a long command of repeated wrappers and options is checked at once', async ($, on) => {
+  gitStub(on, {})
+  const command = 'env -- '.repeat(25) + 'env -u env '.repeat(25) + 'git ' + '-c -c '.repeat(25) + 'log'
+  expect(Boolean((await call($, { tool: 'Bash', command })).deny)).toBe(false)
+})
+
+// git add of a .env is refused on the words alone, with the same reach
+for (const [name, command, isBlocked] of [
+  ['an inline variable before git add .env', 'GIT_TRACE=0 git add -f .env', true],
+  ['git add .env after then', 'if true; then git add .env; fi', true],
+  ['xargs -0 running git add on .env', "printf '%s\\0' .env | xargs -0 git add", true],
+  ['git add .env in a while loop', 'while git add .env; do :; done', true],
+  ['an echo that mentions add and .env', 'echo add .env', false],
+] as const) {
+  test(name, async ($, on) => {
+    gitStub(on, {})
+    expect(Boolean((await call($, { tool: 'Bash', command })).deny)).toBe(isBlocked)
+  })
+}
+
 for (const [staged, isBlocked] of [['src/app.ts\n.env\n', true], ['src/app.ts\n', false]] as const) {
   test(`git commit with staged ${JSON.stringify(staged)}`, async ($, on) => {
     stubs(on, { staged })
@@ -164,6 +186,38 @@ test('a commit is blocked when git cannot say what it includes', async ($, on) =
   gitStub(on, { fails: true })
   expect(Boolean((await call($, { tool: 'Bash', command: 'git commit -m wip' })).deny)).toBe(true)
 })
+
+// Only git run as a command counts: the same words in a URL, a file name or an argument do not
+for (const [name, command, isBlocked] of [
+  ['the Git Data API with a commit.json file', 'gh api repos/o/r/git/trees --input "$S/commit.json"', false],
+  ['git log searching for commit', 'git log --grep commit', false],
+  ['bash -c running git commit', "bash -c 'git commit -m wip'", true],
+  ['git commit after a newline', 'x=1\ngit commit -m wip', true],
+  ['env and a path before git commit', 'env GIT_EDITOR=true /usr/bin/git commit', true],
+  ['git log searching for commit with =', 'git log --grep=commit', false],
+  ['a file path with git and commit in it', 'cat .git/commit.json', false],
+  ['git show of a file named commit', 'git show HEAD:commit.txt', false],
+  ['a word that ends in git', 'legit commit', false],
+  // Each of these commits for real: a miss lets a .env through
+  ['an inline variable before git commit', 'GIT_AUTHOR_NAME=x git commit -m wip', true],
+  ['git.exe commit', 'git.exe commit -m wip', true],
+  ['a quoted Windows path to git.exe', '"C:\\Program Files\\Git\\cmd\\git.exe" commit -m wip', true],
+  ['git commit after then', 'if true; then git commit -m wip; fi', true],
+  ['git commit after do', 'for f in a; do git commit -m wip; done', true],
+  ['git commit in braces', '{ git commit -m wip; }', true],
+  ['time, nohup and xargs before git commit', 'time nohup xargs git commit -m wip', true],
+  ['sudo -u before git commit', 'sudo -u bob git commit -m wip', true],
+  ['--git-dir with a space before commit', 'git --git-dir .git commit -m wip', true],
+  ['a quoted -c value before commit', 'git -c "user.name=A B" commit -m wip', true],
+  ['git commit as an if condition', 'if git commit -m wip; then :; fi', true],
+  ['wrapper options before git commit', 'env -i sudo -u bob -- git commit -m wip', true],
+  ['-c and -C with no space', 'git -cuser.name=x -C. commit -m wip', true],
+] as const) {
+  test(name, async ($, on) => {
+    gitStub(on, { fails: true })
+    expect(Boolean((await call($, { tool: 'Bash', command })).deny)).toBe(isBlocked)
+  })
+}
 
 test('a Windows .env path is read where it is, and its weak values are hidden', async ($, on) => {
   const plain = 'staple' + 'gunwindow' // letters only: no detector rule fires on it
