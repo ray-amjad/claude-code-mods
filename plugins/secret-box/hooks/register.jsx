@@ -42,29 +42,16 @@ export function register(on, options) {
   // 1. Give Claude the tool, and teach the vault the secrets already in .env
   on('session.start', async ($, e, next) => {
     // The box needs a person to paste into, so a headless run gets no request_secret tool
-    if (e.isInteractive !== false) await $.tool.register({
-      name: 'request_secret',
-      description:
-        'Ask the user for a secret (API key, token, password) without it ever entering the conversation. ' +
-        'The user pastes it into a masked box and the mod saves it to the project .env (or the env file named ' +
-        'in `file`, such as .env.local). You get back the ' +
-        'variable name, the absolute path of the file it was saved to, and a placeholder like ' +
-        '[REDACTED-SECRET-1a2b3c4d]. Prefer code that reads the variable from that file. A placeholder written ' +
-        'in a command or file becomes the real value when the tool runs, but a command that sends it off the ' +
-        'machine can be refused by the permission check. Use this INSTEAD of asking the user to ' +
-        'paste a secret into chat.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Environment variable name, e.g. STRIPE_SECRET_KEY' },
-          reason: { type: 'string', description: 'One short line telling the user why it is needed' },
-          file: { type: 'string', description: 'Env file in the project folder to save to, e.g. .env.local. Default .env' },
-        },
-        required: ['name', 'reason'],
-      },
-      isDeferred: false,
-    })
+    if (e.isInteractive !== false) await registerBox($)
     await learnDotenv($, ['.env'])
+    return next(e)
+  })
+
+  // The desktop app and the editors start the session headless (through the
+  // SDK) and attach their surface after: the box can draw there, so the tool
+  // comes now. A -p run never attaches. A name registered again is replaced.
+  on('session.attach', async ($, e, next) => {
+    await registerBox($)
     return next(e)
   })
 
@@ -217,6 +204,32 @@ export function isEnvFile(path) {
 }
 
 // The .env files a tool call reads or names, as written in the call
+// The request_secret tool: what Claude reads about it
+async function registerBox($) {
+  await $.tool.register({
+    name: 'request_secret',
+    description:
+      'Ask the user for a secret (API key, token, password) without it ever entering the conversation. ' +
+      'The user pastes it into a masked box and the mod saves it to the project .env (or the env file named ' +
+      'in `file`, such as .env.local). You get back the ' +
+      'variable name, the absolute path of the file it was saved to, and a placeholder like ' +
+      '[REDACTED-SECRET-1a2b3c4d]. Prefer code that reads the variable from that file. A placeholder written ' +
+      'in a command or file becomes the real value when the tool runs, but a command that sends it off the ' +
+      'machine can be refused by the permission check. Use this INSTEAD of asking the user to ' +
+      'paste a secret into chat.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Environment variable name, e.g. STRIPE_SECRET_KEY' },
+        reason: { type: 'string', description: 'One short line telling the user why it is needed' },
+        file: { type: 'string', description: 'Env file in the project folder to save to, e.g. .env.local. Default .env' },
+      },
+      required: ['name', 'reason'],
+    },
+    isDeferred: false,
+  })
+}
+
 function envFiles(e) {
   const direct = [e.file_path, e.notebook_path, e.path].filter(isEnvFile)
   const named = String(e.command || '').match(/(?:^|[^\w.\/-])((?:[\w.\/-]*\/)?\.env(?:\.[\w.-]+)?)(?![\w.-])/g) || []
