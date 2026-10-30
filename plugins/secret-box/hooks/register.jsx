@@ -258,11 +258,19 @@ function gitDirs(cmd) {
   return [...dirs]
 }
 
-// Whether the command runs `git` as a command (at the start, after ; & | ( ` $(
-// a quote or a newline, through sudo, env or a path), with its global options,
-// then one of `subs`: not the same words inside a URL, a file name or an argument
+// Whether the command runs `git` as a command, then one of `subs`: not the
+// same words inside a URL, a file name or an argument. git may follow ; & | (
+// { ! ` $( a quote or a newline, then VAR=x assignments and wrappers (then, do,
+// time, nohup, exec, xargs, sudo -u x, env ...), as git, git.exe or a path to it,
+// then its global options (-c x, -C dir, --git-dir dir, --no-pager ...).
+// A miss lets a .env commit through, so when unsure this matches.
+const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`
 function gitRuns(cmd, subs) {
-  return new RegExp(String.raw`(?:^|[;&|(\x60\n'"]|\$\()\s*(?:(?:sudo|command|env)\s+(?:\w+=\S*\s+)*)?(?:\S*\/)?git(?:\s+(?:-c\s+\S+|-C\s+(?:"[^"]*"|'[^']*'|\S+)|--[\w-]+(?:=\S+)?|-[pP]))*\s+(?:${subs})\b`).test(cmd)
+  const start = String.raw`(?:^|[;&|(\x60\n'"{!]|\$\()\s*`
+  const wrap = String.raw`(?:(?:\w+=${ARG}|then|do|else|elif|time|nohup|exec|xargs|nice|command|env|sudo(?:\s+-\w+(?:\s+\w+)?)*|!|\{)\s+)*`
+  const git = String.raw`(?:"[^"]*[\/\\]git(?:\.exe)?"|'[^']*[\/\\]git(?:\.exe)?'|(?:[^\s"';&|]*[\/\\])?git(?:\.exe)?)`
+  const opts = String.raw`(?:\s+(?:-[cC]\s+${ARG}|--(?:git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(?:=|\s+)${ARG}|--[\w-]+(?:=\S+)?|-[pP]))*`
+  return new RegExp(`${start}${wrap}${git}${opts}\\s+(?:${subs})\\b`).test(cmd)
 }
 
 // Why a Bash command must be blocked: it stages or commits a .env file

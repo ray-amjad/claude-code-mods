@@ -41,6 +41,18 @@ for (const [name, command, isBlocked] of GUARD) {
   })
 }
 
+// git add of a .env is refused on the words alone, with the same reach
+for (const [name, command, isBlocked] of [
+  ['an inline variable before git add .env', 'GIT_TRACE=0 git add -f .env', true],
+  ['git add .env after then', 'if true; then git add .env; fi', true],
+  ['an echo that mentions add and .env', 'echo add .env', false],
+] as const) {
+  test(name, async ($, on) => {
+    gitStub(on, {})
+    expect(Boolean((await call($, { tool: 'Bash', command })).deny)).toBe(isBlocked)
+  })
+}
+
 for (const [staged, isBlocked] of [['src/app.ts\n.env\n', true], ['src/app.ts\n', false]] as const) {
   test(`git commit with staged ${JSON.stringify(staged)}`, async ($, on) => {
     stubs(on, { staged })
@@ -172,6 +184,21 @@ for (const [name, command, isBlocked] of [
   ['bash -c running git commit', "bash -c 'git commit -m wip'", true],
   ['git commit after a newline', 'x=1\ngit commit -m wip', true],
   ['env and a path before git commit', 'env GIT_EDITOR=true /usr/bin/git commit', true],
+  ['git log searching for commit with =', 'git log --grep=commit', false],
+  ['a file path with git and commit in it', 'cat .git/commit.json', false],
+  ['git show of a file named commit', 'git show HEAD:commit.txt', false],
+  ['a word that ends in git', 'legit commit', false],
+  // Each of these commits for real: a miss lets a .env through
+  ['an inline variable before git commit', 'GIT_AUTHOR_NAME=x git commit -m wip', true],
+  ['git.exe commit', 'git.exe commit -m wip', true],
+  ['a quoted Windows path to git.exe', '"C:\\Program Files\\Git\\cmd\\git.exe" commit -m wip', true],
+  ['git commit after then', 'if true; then git commit -m wip; fi', true],
+  ['git commit after do', 'for f in a; do git commit -m wip; done', true],
+  ['git commit in braces', '{ git commit -m wip; }', true],
+  ['time, nohup and xargs before git commit', 'time nohup xargs git commit -m wip', true],
+  ['sudo -u before git commit', 'sudo -u bob git commit -m wip', true],
+  ['--git-dir with a space before commit', 'git --git-dir .git commit -m wip', true],
+  ['a quoted -c value before commit', 'git -c "user.name=A B" commit -m wip', true],
 ] as const) {
   test(name, async ($, on) => {
     gitStub(on, { fails: true })
