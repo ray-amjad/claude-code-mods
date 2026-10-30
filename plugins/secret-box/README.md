@@ -76,7 +76,7 @@ Stripe object ids (`price_`, `prod_`, `cus_`, `pk_live_` and so on) are public a
 
 ## How it works
 
-- `session.start` registers the tool with `isDeferred: false`, so Claude sees it on every turn, in interactive sessions only (not `-p` or SDK), and reads `.env` in the working directory to learn which values are secret.
+- `session.start` registers the tool with `isDeferred: false`, so Claude sees it on every turn, in interactive sessions only (not `-p` or SDK), and reads `.env` in the working directory to learn which values are secret. `session.attach` registers it too: the desktop app and the editors start the session headless and attach their surface after.
 - The box is a pane opened with `$.ui.open` and an `Input`. The element has no password mode, so the mod masks it itself: the field draws `•` repeated, and `onInput` works out what was typed, pasted or deleted and keeps the real value in a module variable. A hook may only run for 10 seconds of its own time, but time inside a mods API call doesn't count, so it waits for you in short `$.process.run(['sleep', '0.3'])` calls (on Windows, which has no `sleep`, a 300 ms `node -e` wait, or a `ping` of 1 second where node is not installed).
 - On Enter the mod writes `.env` (or the env file Claude names in `file`, such as `.env.local`) with `$.fs` and hands the value to the vault, which answers with the placeholder. The vault maps each value to a random placeholder that stays stable within the session, and lives in memory only.
 - The redaction is [transcript-redactor](../transcript-redactor), unchanged, in `hooks/redact.ts` and `hooks/detect.ts`. `register.jsx` calls its `register` and adds only what secret-box needs, so the two can't drift. Its hooks hide keys in your prompt, CLAUDE.md, tool results, `@` files, the engine's own attachments and subagent tasks, and put real values back into `Bash`, `Write` and `Edit`. A value restored into a command is hidden again if the command prints it.
@@ -95,7 +95,7 @@ Stripe object ids (`price_`, `prod_`, `cus_`, `pk_live_` and so on) are public a
 - **A `.env` value under 8 characters** is hidden in `.env` reads, but not wherever else it turns up.
 - **The vault is memory only.** Placeholders from an earlier session mean nothing in a new one. The mod relearns `.env` at the start of each session, so those values are hidden again.
 - **Only the working directory's `.env` is learned** at session start. Other `.env` files are masked by name when they are read.
-- `claude -p` and SDK sessions get no `request_secret` tool, since there is no one to type into the box. Redaction and the `.env` guard still run there.
+- `claude -p` and SDK sessions get no `request_secret` tool, since there is no one to type into the box, until a surface attaches (the desktop app, an editor). Redaction and the `.env` guard still run there.
 - If your CLAUDE.md says secrets go somewhere else (a vault, a secrets manager), Claude follows that and may not offer the box. Ask for it by name.
 - Mods only load in a folder you have trusted. In a brand new repo, accept the trust prompt first.
 
