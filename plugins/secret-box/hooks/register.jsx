@@ -486,6 +486,11 @@ function shellCommands(src) {
   return out
 }
 
+// A word as written, for a message: "$W" shows as $W
+function unquoted(raw) {
+  return String(raw || '').replace(/["']/g, '') || '?'
+}
+
 // Commands read out of a quoted string, a heredoc or backticks may never run
 function unsure(cmds) {
   for (const c of cmds) c.sure = false
@@ -612,12 +617,12 @@ async function gitDirs($, cmd) {
       if (!value) continue
       const texts = await expand($, value, vars, index)
       if (!texts) {
-        unresolved ??= value.raw || '?'
+        unresolved ??= unquoted(value.raw)
         continue
       }
       // git -C a -C b runs in a/b; an absolute -C starts over
       found = found.flatMap(dir => texts.map(text => (!dir || isAbsolute(text) || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text)))
-      if (found.length > MAX_DIRS) unresolved ??= value.raw || '?'
+      if (found.length > MAX_DIRS) unresolved ??= unquoted(value.raw)
     }
     if (unresolved !== null) dirs.set('?' + unresolved, { unresolved })
     else for (const dir of found) dirs.set(dir, dir)
@@ -678,9 +683,9 @@ async function commitBlockReason($, cmd) {
   // (git add ... && git commit, or commit -a), count what it could stage too:
   // every changed or untracked file git does not ignore.
   const stages = gitRuns(cmd, 'add|stage') || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
-  // No .env was seen in these two cases: say so, so a parsing problem
-  // doesn't read like a found secret
-  const unsure = 'No .env file was found; the guard blocks a commit it cannot check. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
+  // In these two cases nothing was checked: say so, so a parsing problem
+  // doesn't read like a found secret, or like a clean check
+  const unsure = 'This is not a detected .env: the guard could not check this commit, so it blocks it. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
   for (const dir of await gitDirs($, cmd)) {
     if (typeof dir !== 'string') return `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
     const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])

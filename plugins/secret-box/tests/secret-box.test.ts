@@ -284,17 +284,24 @@ for (const command of ['git -C "$UNSET" commit -m msg', 'git -C $UNSET commit -m
     gitStub(on, { argvs, env: { W: DIR } })
     const r = await call($, { tool: 'Bash', command })
     expect(r.deny).toContain("couldn't resolve the git -C directory")
-    expect(r.deny).toContain('No .env file was found')
+    expect(r.deny).not.toMatch(/No \.env|["']\$/)
+    expect(r.deny).toContain('This is not a detected .env: the guard could not check this commit')
     expect(argvs.length).toBe(0)
   })
 }
+
+test('an unresolved -C directory is shown as written, without its quotes', async ($, on) => {
+  gitStub(on, {})
+  const r = await call($, { tool: 'Bash', command: 'git -C "$UNSET" commit -m msg' })
+  expect(r.deny).toContain("couldn't resolve the git -C directory `$UNSET`")
+})
 
 test('a -C directory git cannot read is blocked as a git problem, not a found .env', async ($, on) => {
   gitStub(on, { repos: [DIR] })
   const r = await call($, { tool: 'Bash', command: 'git -C /nowhere commit -m msg' })
   expect(r.deny).toContain("couldn't read git state in /nowhere")
   expect(r.deny).toContain("cannot change to '/nowhere'")
-  expect(r.deny).toContain('No .env file was found')
+  expect(r.deny).toContain('This is not a detected .env: the guard could not check this commit')
 })
 
 test('a commit is blocked when git cannot say what it includes', async ($, on) => {
