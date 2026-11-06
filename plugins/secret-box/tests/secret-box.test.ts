@@ -56,6 +56,21 @@ for (const [name, command, isBlocked] of [
   ['xargs -0 running git add on .env', "printf '%s\\0' .env | xargs -0 git add", true],
   ['git add .env in a while loop', 'while git add .env; do :; done', true],
   ['an echo that mentions add and .env', 'echo add .env', false],
+  // #30: only a .env in the add's own arguments counts
+  ['git add src/.env.local', 'git add src/.env.local', true],
+  ['git -C foo add .env', 'git -C foo add .env', true],
+  ['git -c core.x=1 add .env', 'git -c core.x=1 add .env', true],
+  ['git stage .env', 'git stage .env', true],
+  ['git add -f .env 2>&1', 'git add -f .env 2>&1', true],
+  ['git add &>/dev/null then .env', 'git add &>/dev/null .env', true],
+  ['the second of two adds names .env', 'git add a.ts && git add .env', true],
+  ['git add of a variable set to .env', 'f=.env; git add "$f"', true],
+  ['git add of a glob, with .env named elsewhere', 'git add -f .e*; echo .env', true],
+  ['git add -A, then an echo', 'git add -A && echo x', false],
+  ['git add a.ts, then cat .env', 'git add a.ts; cat .env', false],
+  ['git add with --env-file=.env later in the command', 'git add src && node --env-file=.env app.js', false],
+  ['git worktree add with a .env path', 'git worktree add x ../.env', false],
+  ['git worktree add, then an append to .env', 'git worktree add -q --detach dir origin/main && echo ok >> .env', false],
 ] as const) {
   test(name, async ($, on) => {
     gitStub(on, {})
