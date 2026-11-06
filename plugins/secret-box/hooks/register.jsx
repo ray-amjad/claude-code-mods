@@ -259,16 +259,285 @@ export function isAbsolute(path) {
   return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
 }
 
-// The repositories a command's git calls run in: each `git -C <dir>`, and the
-// session's own repository for a plain `git`
-function gitDirs(cmd) {
-  const dirs = new Set()
-  for (const m of cmd.matchAll(/\bgit((?:[ \t]+-c[ \t]+\S+|[ \t]+-C[ \t]+(?:"[^"]*"|'[^']*'|\S+))*)/g)) {
-    const c = m[1].match(/-C[ \t]+("[^"]*"|'[^']*'|\S+)/g)
-    if (!c) dirs.add('')
-    else dirs.add(c.at(-1).replace(/^-C[ \t]+/, '').replace(/^["']|["']$/g, ''))
+// Split a shell command into its simple commands, in order, the way bash
+// reads it: quotes, escapes, $VAR / ${VAR}, $( ) and backticks, heredocs.
+// A word is a list of parts: { lit, q } text (q: it was quoted), { name } a
+// variable, { sub } anything else that expands ($(..), $1, ${x:-y} ...).
+// The commands inside $( ) and backticks come out as commands too, and so do
+// a quoted string or a heredoc body that itself runs git (bash -c '...',
+// ssh host "...", bash <<EOF): a miss there would skip a repository.
+function shellCommands(src) {
+  const out = []
+  let i = 0
+  const parse = (inSub) => {
+    let words = []
+    let word = null
+    let depth = 0
+    const heredocs = []
+    const begin = () => { word ??= { parts: [], start: i } }
+    const part = (p) => {
+      begin()
+      const last = word.parts.at(-1)
+      if (p.lit !== undefined && last?.lit !== undefined && last.q === p.q) last.lit += p.lit
+      else word.parts.push(p)
+    }
+    const endWord = () => {
+      if (word) words.push({ ...word, raw: src.slice(word.start, i) })
+      word = null
+    }
+    const endCmd = () => {
+      endWord()
+      if (words.length) out.push(words)
+      words = []
+    }
+    // A quoted string or heredoc body that runs git is shell code: read it too
+    const nested = (text) => {
+      if (gitRuns(text, 'commit|add|stage')) out.push(...shellCommands(text))
+    }
+    const subst = () => {
+      // at "$(": read the commands up to the matching ")"
+      i += 2
+      parse(true)
+      i++
+    }
+    const dollar = () => {
+      begin()
+      const start = i
+      if (src.startsWith('$((', i)) {
+        const end = src.indexOf('))', i)
+        i = end < 0 ? src.length : end + 2
+        return part({ sub: src.slice(start, i) })
+      }
+      if (src[i + 1] === '(') {
+        subst()
+        return part({ sub: src.slice(start, i) })
+      }
+      if (src[i + 1] === '{') {
+        const end = src.indexOf('}', i)
+        i = end < 0 ? src.length : end + 1
+        const inner = src.slice(start + 2, i - 1)
+        return part(/^[A-Za-z_]\w*$/.test(inner) ? { name: inner, raw: src.slice(start, i) } : { sub: src.slice(start, i) })
+      }
+      const name = src.slice(i + 1).match(/^[A-Za-z_]\w*/)
+      if (name) {
+        i += 1 + name[0].length
+        return part({ name: name[0], raw: src.slice(start, i) })
+      }
+      if (/[0-9@*#?$!-]/.test(src[i + 1] || '')) {
+        i += 2
+        return part({ sub: src.slice(start, i) })
+      }
+      i++
+      part({ lit: '$', q: false })
+    }
+    const backtick = () => {
+      begin()
+      const start = i
+      let body = ''
+      for (i++; i < src.length && src[i] !== '`'; i++) body += src[i] === '\\' && i + 1 < src.length ? src[++i] : src[i]
+      i++
+      out.push(...shellCommands(body))
+      part({ sub: src.slice(start, i) })
+    }
+    const readHeredocs = () => {
+      for (const h of heredocs.splice(0)) {
+        let body = ''
+        while (i < src.length) {
+          let end = src.indexOf('\n', i)
+          if (end < 0) end = src.length
+          const line = src.slice(i, end)
+          i = Math.min(end + 1, src.length)
+          if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) break
+          body += line + '\n'
+        }
+        nested(body)
+      }
+    }
+    while (i < src.length) {
+      const ch = src[i]
+      if (ch === '\n') {
+        endCmd()
+        i++
+        readHeredocs()
+      } else if (ch === ' ' || ch === '\t' || ch === '\r') {
+        endWord()
+        i++
+      } else if (ch === '#' && !word) {
+        while (i < src.length && src[i] !== '\n') i++
+      } else if (ch === ')' && inSub && depth === 0) {
+        endCmd()
+        return
+      } else if (';&|()'.includes(ch)) {
+        if (ch === '(') depth++
+        if (ch === ')') depth--
+        endCmd()
+        i++
+      } else if (src.startsWith('<<', i) && src[i + 2] !== '<') {
+        // a heredoc: its body starts on the next line, and is not shell code
+        endWord()
+        i += 2
+        const strip = src[i] === '-'
+        if (strip) i++
+        while (src[i] === ' ' || src[i] === '\t') i++
+        const m = src.slice(i).match(/^(?:'([^']*)'|"([^"]*)"|\\?([^\s;&|<>()]+))/)
+        if (m) {
+          heredocs.push({ delim: m[1] ?? m[2] ?? m[3], strip })
+          i += m[0].length
+        }
+      } else if (ch === '<' || ch === '>') {
+        // a redirection: 2>&1, >&2, <<< ... (its target is the next word)
+        endWord()
+        while (src[i] === '<' || src[i] === '>') i++
+        if (src[i] === '&') for (i++; /[0-9-]/.test(src[i] || ''); i++);
+      } else if (ch === "'") {
+        let end = src.indexOf("'", i + 1)
+        if (end < 0) end = src.length
+        const text = src.slice(i + 1, end)
+        part({ lit: text, q: true })
+        i = end + 1
+        nested(text)
+      } else if (ch === '$' && src[i + 1] === "'") {
+        begin()
+        let text = ''
+        for (i += 2; i < src.length && src[i] !== "'"; i++) text += src[i] === '\\' && i + 1 < src.length ? src[++i] : src[i]
+        i++
+        part({ lit: text, q: true })
+      } else if (ch === '"') {
+        let text = ''
+        part({ lit: '', q: true })
+        for (i++; i < src.length && src[i] !== '"';) {
+          if (src[i] === '\\' && '$`"\\\n'.includes(src[i + 1] || 'x')) {
+            if (src[i + 1] !== '\n') part({ lit: src[i + 1], q: true })
+            text += src.slice(i, i + 2)
+            i += 2
+          } else if (src[i] === '$') {
+            const at = i
+            dollar()
+            text += src.slice(at, i)
+          } else if (src[i] === '`') {
+            const at = i
+            backtick()
+            text += src.slice(at, i)
+          } else {
+            part({ lit: src[i], q: true })
+            text += src[i++]
+          }
+        }
+        i++
+        nested(text)
+      } else if (ch === '\\') {
+        // An escaped space, quote or operator is that character. Any other
+        // backslash stays: C:\repo is a Windows path, not C:repo.
+        const next = src[i + 1]
+        if (next === '\n') i += 2
+        else if (next !== undefined && /[\s'"$`;&|<>(){}*?#!~\[\]]/.test(next)) {
+          part({ lit: next, q: true })
+          i += 2
+        } else {
+          part({ lit: '\\', q: false })
+          i++
+        }
+      } else if (ch === '$') {
+        dollar()
+      } else if (ch === '`') {
+        backtick()
+      } else {
+        part({ lit: ch, q: false })
+        i++
+      }
+    }
+    endCmd()
   }
-  return [...dirs]
+  parse(false)
+  return out
+}
+
+// A word that is only literal text, as the command will see it
+function literal(word) {
+  return word.parts.every(p => p.lit !== undefined) ? word.parts.map(p => p.lit).join('') : null
+}
+
+// The text a word expands to, from the variables set earlier in the command
+// (and HOME). null when it can't be known: $(..), a variable set elsewhere.
+async function expand($, word, vars) {
+  let text = ''
+  for (const [n, p] of word.parts.entries()) {
+    if (p.lit !== undefined) {
+      // ~ at the start of an unquoted word is the home folder
+      if (n === 0 && !p.q && /^~(\/|\\|$)/.test(p.lit)) {
+        const home = await envVar($, vars, 'HOME')
+        if (home == null) return null
+        text += home + p.lit.slice(1)
+      } else text += p.lit
+    } else if (p.name !== undefined) {
+      const v = await envVar($, vars, p.name)
+      if (v == null) return null
+      text += v
+    } else return null
+  }
+  return text
+}
+
+// A hook reads only the environment variables it names, so HOME is the one
+// known outside the command; any other variable can't be known here.
+async function envVar($, vars, name) {
+  if (vars.has(name)) return vars.get(name)
+  if (name !== 'HOME') return null
+  try { return (await $.env.get('HOME')) ?? null } catch { return null }
+}
+
+// The repositories a command's git calls run in: each `git -C <dir>`, and the
+// session's own repository ('') for a plain `git`. A directory that can't be
+// worked out comes back as { unresolved: the text as written }.
+async function gitDirs($, cmd) {
+  const dirs = new Map()
+  // Variables set by the command itself before the git call: W=/x; export W=/x
+  const vars = new Map()
+  for (const words of shellCommands(cmd)) {
+    const first = literal(words[0]) ?? ''
+    const assignment = w => !w.parts[0].q && w.parts[0].lit?.match(/^([A-Za-z_]\w*)=/)
+    // `W=/x` alone sets W for the rest of the command; `W=/x git ...` only
+    // for that git, which still expands $W to the old value
+    const isDeclare = /^(export|declare|typeset|local|readonly)$/.test(first)
+    if (isDeclare || words.every(assignment)) {
+      for (const w of words) {
+        const m = assignment(w)
+        if (!m) continue
+        const rest = { parts: [{ ...w.parts[0], lit: w.parts[0].lit.slice(m[0].length) }, ...w.parts.slice(1)] }
+        vars.set(m[1], await expand($, rest, vars))
+      }
+      continue
+    }
+    // A loop or `unset` makes a variable something the command can't tell
+    if (/^(for|select)$/.test(first) && words[1]) vars.set(literal(words[1]), null)
+    if (first === 'unset') for (const w of words.slice(1)) vars.set(literal(w), null)
+
+    // git, git.exe or a path to it; then its global options, up to the subcommand
+    const at = words.findIndex(w => /(^|[\\/])git(\.exe)?$/i.test(literal(w) ?? ''))
+    if (at < 0) continue
+    let dir = ''
+    let unresolved = null
+    for (let k = at + 1; k < words.length; k++) {
+      const opt = literal(words[k])
+      let value = null
+      if (opt === '-C') value = words[++k]
+      else if (opt === null && words[k].parts[0].lit?.startsWith('-C') && !words[k].parts[0].q) {
+        value = { parts: [{ ...words[k].parts[0], lit: words[k].parts[0].lit.slice(2) }, ...words[k].parts.slice(1)], raw: words[k].raw.slice(2) }
+      } else if (opt?.startsWith('-C')) value = { parts: [{ lit: opt.slice(2), q: false }], raw: opt.slice(2) }
+      else if (opt === '-c' || /^--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)$/.test(opt ?? '')) k++
+      else if (!/^-/.test(opt ?? words[k].parts[0].lit ?? '')) break
+      if (!value) continue
+      const text = await expand($, value, vars)
+      if (text == null) unresolved ??= value.raw || '?'
+      // git -C a -C b runs in a/b; an absolute -C starts over
+      else dir = !dir || isAbsolute(text) || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text
+    }
+    if (unresolved !== null) dirs.set('?' + unresolved, { unresolved })
+    else dirs.set(dir, dir)
+  }
+  // gitRuns saw a commit, but no git call came out here: check the session's repository
+  if (dirs.size === 0) dirs.set('', '')
+  return [...dirs.values()]
 }
 
 // Whether the command runs `git` as a command, then one of `subs`: not the
@@ -302,12 +571,19 @@ async function commitBlockReason($, cmd) {
   // (git add ... && git commit, or commit -a), count what it could stage too:
   // every changed or untracked file git does not ignore.
   const stages = gitRuns(cmd, 'add|stage') || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
-  for (const dir of gitDirs(cmd)) {
+  // No .env was seen in these two cases: say so, so a parsing problem
+  // doesn't read like a found secret
+  const unsure = 'No .env file was found; the guard blocks a commit it cannot check. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
+  for (const dir of await gitDirs($, cmd)) {
+    if (typeof dir !== 'string') return `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable or substitution this command does not set itself). ${unsure}`
     const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])
     const checks = [git('diff', '--cached', '--name-only')]
     if (stages) checks.push(git('ls-files', '--modified', '--others', '--exclude-standard'))
     for (const r of await Promise.all(checks)) {
-      if (r.exitCode !== 0) return `could not check what this commit includes${dir ? ' in ' + dir : ''}, so it is blocked.`
+      if (r.exitCode !== 0) {
+        const said = String(r.stderr || '').trim().split('\n')[0]
+        return `couldn't read git state in ${dir || 'the session directory'}${said ? ` (git: ${said})` : ''}. ${unsure}`
+      }
       const env = r.stdout.split('\n').find(isEnvFile)
       if (env) {
         return stages
