@@ -612,19 +612,39 @@ const ARG = String.raw`(?:"[^"]*"|'[^']*'|[^\s-]\S*)`
 // Wrapper options that take a value (sudo -u x, env -u X, xargs -I {} ...).
 // Each token has one reading only, so a long command can't make the regex backtrack.
 const VALUE_OPTS = 'ugCDhprtUSadEILnPs'
-function gitRuns(cmd, subs) {
+function gitRunPattern(subs, flags) {
   const start = String.raw`(?:^|[;&|(\x60\n'"{!]|\$\()\s*`
   const option = String.raw`(?:-[${VALUE_OPTS}]\s+[^\s;&|]+|-(?![${VALUE_OPTS}](?:\s|$))\S*)`
-  const wrap = String.raw`(?:(?:\w+=${ARG}|if|then|do|else|elif|while|until|(?:time|nohup|exec|xargs|nice|command|env|sudo)(?:\s+${option})*|!|\{)\s+)*`
+  const wrap = String.raw`((?:(?:\w+=${ARG}|if|then|do|else|elif|while|until|(?:time|nohup|exec|xargs|nice|command|env|sudo)(?:\s+${option})*|!|\{)\s+)*)`
   const git = String.raw`(?:"[^"]*[\/\\]git(?:\.exe)?"|'[^']*[\/\\]git(?:\.exe)?'|(?:[^\s"';&|]*[\/\\])?git(?:\.exe)?)`
   const long = 'git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
   const opts = String.raw`(?:\s+(?:-[cC]\s*${ARG}|--(?:${long})(?:=|\s+)${ARG}|--(?!(?:${long})\b)[\w-]+(?:=\S+)?|-[pP]))*`
-  return new RegExp(`${start}${wrap}${git}${opts}\\s+(?:${subs})\\b`).test(cmd)
+  // Group 1: the wrappers before git. Group 2: the sub-command's own arguments,
+  // up to the next ; & | or newline (a redirection such as 2>&1 or &> does not end them).
+  return new RegExp(`${start}${wrap}${git}${opts}\\s+(?:${subs})\\b((?:[^;&|\\n]|[<>]&|&>)*)`, flags)
+}
+function gitRuns(cmd, subs) {
+  return gitRunPattern(subs, '').test(cmd)
+}
+
+// Whether a git add / git stage in the command names a .env file: in its own
+// arguments, or, when xargs runs it, anywhere before it (the file list comes
+// in on stdin). A .env elsewhere in the command (node --env-file=.env, cat .env,
+// a second command) is not staged by the add, unless the add's arguments are
+// expanded by the shell ($f, `...`, a glob), where any .env could be what they name.
+const STAGED_ENV = /\.env\b(?!\.(example|sample|template|dist))/
+function addsEnvFile(cmd) {
+  for (const m of cmd.matchAll(gitRunPattern('add|stage', 'g'))) {
+    if (STAGED_ENV.test(m[2])) return true
+    if (/\bxargs\b/.test(m[1]) && STAGED_ENV.test(cmd.slice(0, m.index))) return true
+    if (/[$\x60*?[]/.test(m[2]) && STAGED_ENV.test(cmd)) return true
+  }
+  return false
 }
 
 // Why a Bash command must be blocked: it stages or commits a .env file
 async function commitBlockReason($, cmd) {
-  if (gitRuns(cmd, 'add|stage') && /\.env\b(?!\.(example|sample|template|dist))/.test(cmd)) {
+  if (addsEnvFile(cmd)) {
     return 'staging a .env file is blocked.'
   }
   if (!gitRuns(cmd, 'commit')) return ''
