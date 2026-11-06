@@ -253,6 +253,12 @@ for (const [name, command] of [
   ['an assignment in a subshell', `W=${UNSAFE}; (W=/safe); git -C "$W" commit -m msg`],
   ['an assignment after the git call, in a loop', `W=${UNSAFE}; for i in 1 2; do git -C "$W" commit -m msg; W=/safe; done`],
   ['an assignment through another variable', `S=/safe; U=${UNSAFE}; W=$U; true || W=$S; git -C "$W" commit -m msg`],
+  ['an assignment on its own line inside if', `W=${UNSAFE}; if false; then\nW=/safe\nfi; git -C "$W" commit -m msg`],
+  ['an assignment on its own line inside a loop', `W=${UNSAFE}\nwhile false; do\n  W=/safe\ndone\ngit -C "$W" commit -m msg`],
+  ['an assignment on its own line inside case', `W=${UNSAFE}\ncase x in\n  y)\n    W=/safe\n    ;;\nesac\ngit -C "$W" commit -m msg`],
+  ['an assignment on its own line inside { }', `W=${UNSAFE}\nf() {\n  W=/safe\n}\ngit -C "$W" commit -m msg`],
+  ['an assignment after && and a newline', `W=${UNSAFE}; false &&\nW=/safe\ngit -C "$W" commit -m msg`],
+  ['an assignment piped to another command', `W=${UNSAFE}; W=/safe | cat; git -C "$W" commit -m msg`],
 ] as const) {
   test(`a .env commit is blocked despite ${name}`, async ($, on) => {
     gitStub(on, { repos: [UNSAFE, '/safe'], dirty: UNSAFE })
@@ -262,7 +268,7 @@ for (const [name, command] of [
 }
 
 // W may hold anything from the shell when the only W= might not run
-for (const command of ['false && W=/safe; git -C "$W" commit -m msg', 'git commit -m "W=/safe; git commit"; git -C "$W" commit -m msg', 'git -C "$W" commit -m msg; W=/safe']) {
+for (const command of ['source vars.sh; if false; then\nW=/safe\nfi; git -C "$W" commit -m msg', 'false &&\nW=/safe\ngit -C "$W" commit -m msg', 'W=/safe &\ngit -C "$W" commit -m msg', 'git commit -m "W=/safe; git commit"; git -C "$W" commit -m msg', 'git -C "$W" commit -m msg; W=/safe']) {
   test(`a -C variable with no assignment that surely runs first is unresolved: ${command}`, async ($, on) => {
     const argvs: string[][] = []
     gitStub(on, { argvs, repos: ['/safe'] })

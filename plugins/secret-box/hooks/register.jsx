@@ -274,10 +274,18 @@ function shellCommands(src) {
     let word = null
     let depth = 0
     // Whether the next command surely runs once its turn comes: it starts the
-    // command or follows ; or a newline, outside ( ) and $( )
+    // command or follows ; or a newline, outside ( ), $( ) and every if, loop,
+    // case or { } body (ctl counts those open, across newlines), and is not a
+    // member of a pipe or a & background job (a subshell)
     let sureNext = true
+    let ctl = 0
+    // After && || or |, a newline continues the list rather than ending it
+    let cont = false
     const heredocs = []
-    const begin = () => { word ??= { parts: [], start: i } }
+    const begin = () => {
+      cont = false
+      word ??= { parts: [], start: i }
+    }
     const part = (p) => {
       begin()
       const last = word.parts.at(-1)
@@ -288,10 +296,21 @@ function shellCommands(src) {
       if (word) words.push({ ...word, raw: src.slice(word.start, i) })
       word = null
     }
-    const endCmd = () => {
+    const endCmd = (alone = true) => {
       endWord()
       if (words.length) {
-        words.sure = sureNext && depth === 0 && !inSub
+        words.sure = alone && sureNext && ctl === 0 && depth === 0 && !inSub
+        // if, while ... and { open a body, fi, done, esac and } close one:
+        // as the leading words, and { after `function name`
+        for (const w of words) {
+          const t = literal(w) ?? ''
+          if (/^(if|while|until|for|select|case|\{)$/.test(t)) ctl++
+          else if (/^(fi|done|esac|\})$/.test(t)) ctl = Math.max(0, ctl - 1)
+          else if (t === 'function') {
+            if (words.some(x => literal(x) === '{')) ctl++
+            break
+          } else if (!/^(then|do|else|elif|!|time)$/.test(t)) break
+        }
         out.push(words)
       }
       words = []
@@ -363,7 +382,7 @@ function shellCommands(src) {
       const ch = src[i]
       if (ch === '\n') {
         endCmd()
-        sureNext = true
+        if (!cont) sureNext = true
         i++
         readHeredocs()
       } else if (ch === ' ' || ch === '\t' || ch === '\r') {
@@ -374,11 +393,18 @@ function shellCommands(src) {
       } else if (ch === ')' && inSub && depth === 0) {
         endCmd()
         return
+      } else if (ch === '&' && src[i + 1] === '>') {
+        // &> file: a redirection, not a background job
+        endWord()
+        i += src[i + 2] === '>' ? 3 : 2
       } else if (';&|()'.includes(ch)) {
         if (ch === '(') depth++
         if (ch === ')') depth--
-        endCmd()
+        // a single | or & puts the command before it in a subshell
+        const isSub = (ch === '|' || ch === '&') && src[i + 1] !== ch && src[i - 1] !== ch
+        endCmd(!isSub)
         sureNext = ch === ';'
+        cont = ch === '&' || ch === '|'
         i++
       } else if (src.startsWith('<<', i) && src[i + 2] !== '<') {
         // a heredoc: its body starts on the next line, and is not shell code
