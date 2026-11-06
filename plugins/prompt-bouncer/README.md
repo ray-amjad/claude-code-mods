@@ -6,6 +6,8 @@ A Claude Code mod that stops vague prompts before Claude sees them. When a promp
 
 A vague prompt costs a whole turn of Claude guessing, and a wrong guess stays in the context and sometimes in your files. This mod checks every prompt at `prompt.submit`, the moment you press Enter. A bounced prompt never reaches the model, costs no tokens, and goes back in the prompt box for you to fix.
 
+In -p / SDK sessions the drop still applies, but no status line or bounce toast is drawn.
+
 - **Quick mode** (the default) uses no model and is instant. A short prompt that leans on "the thing", "stuff" or "that bug", or a bare "it" on the first prompt of a session, and names no file, feature or component, is bounced.
 - **Project mode** reads the project's own docs (`CLAUDE.md`, `docs/glossary.md`, decision records, specs) and asks Haiku whether the prompt is specific and uses the project's terms. If not, the toast suggests the right one: "This project calls that the Billing Panel. Is the wrong price in the plan display or an invoice?"
 - `/force <prompt>` sends anything past it. Slash commands always pass.

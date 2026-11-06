@@ -9,6 +9,7 @@ A key that reaches the conversation is in the transcript for good. It is sent to
 - **A tool to ask with.** `request_secret` takes a variable name and a one-line reason. Its description tells Claude to use it instead of asking you to paste.
 - **A masked box.** A pane opens beside the transcript with the field already focused. It only ever draws dots and a character count.
 - **A placeholder to use.** The mod writes `NAME=value` to `.env` (and makes sure `.gitignore` covers it), then tells Claude the name and a placeholder. Claude can put the placeholder in a command or a file: `curl -u [REDACTED-SECRET-3f9a1c2e]: https://api.stripe.com/v1/balance` runs with the real key.
+- **In the folder Claude started in.** The `.env` file goes in the folder you launched Claude from, even after Claude has `cd`-ed into a subfolder, so a key never lands inside a source folder that ships. In a monorepo, start Claude in the package that needs the key.
 - **Placeholders on the way out.** Every tool result is scanned before Claude sees it. About 70 vendor key shapes (`sk_live_`, `ghp_`, `AKIA`, `xoxb-` and more), any key shaped like a short lowercase prefix and a long random body (`imp_` and 40 hex), passwords on CLI flags and in connection strings, base64 that decodes to a key, high-entropy tokens, every `.env` value with a secret name, and every value the mod already knows come back as placeholders. `cat .env` still shows `PORT=3000`.
 - **Placeholders on the way in.** A key you paste into the prompt by mistake is swapped for a placeholder before Claude reads it.
 - **Never committed.** `git add .env` and a `git commit` that would carry a `.env` file are refused, because a pushed key can't be taken back.
@@ -75,9 +76,9 @@ Stripe object ids (`price_`, `prod_`, `cus_`, `pk_live_` and so on) are public a
 
 ## How it works
 
-- `session.start` registers the tool with `isDeferred: false`, so Claude sees it on every turn, and reads `.env` in the working directory to learn which values are secret.
+- `session.start` registers the tool with `isDeferred: false`, so Claude sees it on every turn, in interactive sessions only (not `-p` or SDK), and reads `.env` in the working directory to learn which values are secret. `session.attach` registers it too: the desktop app and the editors start the session headless and attach their surface after.
 - The box is a pane opened with `$.ui.open` and an `Input`. The element has no password mode, so the mod masks it itself: the field draws `•` repeated, and `onInput` works out what was typed, pasted or deleted and keeps the real value in a module variable. A hook may only run for 10 seconds of its own time, but time inside a mods API call doesn't count, so it waits for you in short `$.process.run(['sleep', '0.3'])` calls (on Windows, which has no `sleep`, a 300 ms `node -e` wait, or a `ping` of 1 second where node is not installed).
-- On Enter the mod writes `.env` with `$.fs` and hands the value to the vault, which answers with the placeholder. The vault maps each value to a random placeholder that stays stable within the session, and lives in memory only.
+- On Enter the mod writes `.env` (or the env file Claude names in `file`, such as `.env.local`) with `$.fs` and hands the value to the vault, which answers with the placeholder. The vault maps each value to a random placeholder that stays stable within the session, and lives in memory only.
 - The redaction is [transcript-redactor](../transcript-redactor), unchanged, in `hooks/redact.ts` and `hooks/detect.ts`. `register.jsx` calls its `register` and adds only what secret-box needs, so the two can't drift. Its hooks hide keys in your prompt, CLAUDE.md, tool results, `@` files, the engine's own attachments and subagent tasks, and put real values back into `Bash`, `Write` and `Edit`. A value restored into a command is hidden again if the command prints it.
 - Before a tool reads a `.env` file, a `tool.call` hook reads it too and gives every value whose name says secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like) to the vault. So even a weak value the detector would miss, like a word password, comes back as a placeholder.
 - A `tool.call` hook on `Bash` refuses `git add` of a `.env` file and runs `git diff --cached --name-only` before any `git commit`. A `prompt.mention` hook refuses `@.env`, which would attach the raw file.
@@ -94,7 +95,7 @@ Stripe object ids (`price_`, `prod_`, `cus_`, `pk_live_` and so on) are public a
 - **A `.env` value under 8 characters** is hidden in `.env` reads, but not wherever else it turns up.
 - **The vault is memory only.** Placeholders from an earlier session mean nothing in a new one. The mod relearns `.env` at the start of each session, so those values are hidden again.
 - **Only the working directory's `.env` is learned** at session start. Other `.env` files are masked by name when they are read.
-- `claude -p` has no one to type, so the tool answers that it needs an interactive session.
+- `claude -p` and SDK sessions get no `request_secret` tool, since there is no one to type into the box, until a surface attaches (the desktop app, an editor). Redaction and the `.env` guard still run there.
 - If your CLAUDE.md says secrets go somewhere else (a vault, a secrets manager), Claude follows that and may not offer the box. Ask for it by name.
 - Mods only load in a folder you have trusted. In a brand new repo, accept the trust prompt first.
 
@@ -107,7 +108,7 @@ claude plugin test .
 node --experimental-strip-types tests/detect.test.mts
 ```
 
-`tests/secret-box.test.ts` covers the guard, `.env` values and the round trip from placeholder to value. `tests/detect.test.mts` is transcript-redactor's detector test: 174 values that must be hidden and 114 that must be kept.
+`tests/secret-box.test.ts` covers the guard, `.env` values and the round trip from placeholder to value. `tests/request-secret.test.ts` covers the box: saving to `.env` or `.env.local`, refusing a path, a trailing dot or a git-tracked file in `file`, and letting go of a request that failed, timed out or was overtaken. `tests/detect.test.mts` is transcript-redactor's detector test: 176 values that must be hidden and 117 that must be kept.
 
 Tested with Claude Code 2.1.296.
 

@@ -22,6 +22,8 @@ let path = []
 let view = 'node'
 // Where the session transcripts live, from the Stop hook
 let transcriptPath = ''
+// Set at each session.start; true for -p / SDK sessions, where the pane is never drawn
+let headless = false
 
 // Cheap check, no model: does the end of the reply ask something?
 // A question mark in the last paragraph, or a numbered / lettered / bulleted list of options.
@@ -231,6 +233,8 @@ async function continueBranch($, node) {
 
 // Open the side pane. Unasked, Claude Code only places it on a wide terminal.
 async function openPane($, asked) {
+  // A -p run with DECISION_TREE_WAIT still builds the tree, but has no pane to open
+  if (headless) return
   // focus takes only true, so leave it out for an unasked open
   const pane = { id: PANE, title: 'Decision tree' }
   // Asked from /explain: take the keys, Escape closes it, and ask for room above the prompt
@@ -252,6 +256,8 @@ function parseJson(text) {
 
 export function register(on, options) {
   on('session.start', async ($, e, next) => {
+    headless = e.isInteractive === false
+    if (headless) return next(e)
     await $.command.register({
       name: 'explain',
       description: 'Show the decision tree; A to H explores an option, other <answer> explores your own',
@@ -270,13 +276,16 @@ export function register(on, options) {
   // After each of Claude's replies: regex check, then the gate, then the fork
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    // Headless: nothing would be shown, so skip the gate and the fork, unless DECISION_TREE_WAIT asks for it
+    const wait = (await $.env.get('DECISION_TREE_WAIT')) === '1'
+    if (headless && !wait) return result
     // A branch's own claude -p run never explains its own replies
     if ((await $.env.get('DECISION_TREE_CHILD')) === '1') return result
     if (e.agentId || e.reason !== 'answer' || !looksLikeQuestion(e.answer)) return result
     if (!(await needsDecision($, e.answer, options.gateModel || 'haiku'))) return result
     // Run the fork without holding up the prompt; in a -p run, wait so the process lives on
     const work = explainRoot($, e.answer).catch(err => $.ui.log('decision-tree failed: ' + err))
-    if ((await $.env.get('DECISION_TREE_WAIT')) === '1') await work
+    if (wait) await work
     return result
   })
 

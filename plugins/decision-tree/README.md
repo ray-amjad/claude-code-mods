@@ -13,6 +13,8 @@ After every turn:
 
 You answer Claude in the prompt as usual. Nothing in the pane goes back to Claude.
 
+Does nothing in -p / SDK sessions, unless `DECISION_TREE_WAIT=1` is set (see below).
+
 ## Exploring
 
 ![The pane on a branch: "If you pick SQLite" with the steps the forked session would take and its session id, under it the map of every question and option explored, and below the window a graph of the main session with two forks off its question, one for SQLite and one for your own "use Redis" answer, each reaching its own next question](branches.png)

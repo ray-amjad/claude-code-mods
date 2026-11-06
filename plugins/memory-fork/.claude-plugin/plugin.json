@@ -1,6 +1,6 @@
 {
   "name": "memory-fork",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "After each turn Haiku decides whether memory needs a change; a tool-less fork of the session drafts it and the mod writes it, with a band and a pane showing what changed",
   "author": { "name": "Ray Amjad", "url": "https://github.com/ray-amjad" },
   "repository": "https://github.com/ray-amjad/claude-code-mods/tree/main/plugins/memory-fork",

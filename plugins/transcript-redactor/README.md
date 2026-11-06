@@ -59,6 +59,7 @@ And kept, because hiding it would only add noise:
 - **Public ids.** Stripe object ids (`price_`, `prod_`, `cus_`, `pk_live_`) and YouTube channel ids are printed in dashboards and code.
 - **Names.** `lesson_article_outline_open_v1` and `randomTimestampWithinLast14Days` read as high entropy, but a key isn't built out of words.
 - **Alphabets.** A long token that uses every character once is a charset constant.
+- **MCP tool names.** `mcp__<server>__<tool>` is judged one part at a time, so a server name holding a UUID doesn't hide the tool from Claude. A random part is still hidden.
 - **Bare hex.** A 40-character hex run is a git SHA far more often than a key, so it only counts when a key name sits in front of it.
 
 With `pii` on, public IPv4 addresses and full-form IPv6 addresses are hidden. Email addresses are hidden too unless `hideEmails` is `false`, except `noreply@`, documentation domains like `@example.com`, and anything in `allowEmails`.
@@ -132,7 +133,7 @@ node --experimental-strip-types test/random-tags.test.mts
 node --experimental-strip-types test/pii-options.test.mts
 ```
 
-`test/detect.test.mts` holds two lists, 174 values that must be hidden and 114 that must be kept, and times the scan on large inputs. A change to a pattern or a threshold is only done when both lists still pass. `tests/redact.test.ts` covers the hooks: restore, scrub and fail closed.
+`test/detect.test.mts` holds two lists, 176 values that must be hidden and 117 that must be kept, and times the scan on large inputs. A change to a pattern or a threshold is only done when both lists still pass. `tests/redact.test.ts` covers the hooks: restore, scrub and fail closed.
 
 Tested with Claude Code 2.1.296.
 

@@ -20,10 +20,13 @@ const ANCHOR = /[\w-]+\.[a-z]{1,5}\b|\/[\w.-]+|`[^`]+`|"[^"]+"|\b[A-Z][a-z]+[A-Z
 let modeOverride = null
 let bounces = 0
 let forceNext = null
+// Set at each session.start. In -p / SDK sessions there is no status line or toast to draw
+let headless = false
 
 export function register(on, options) {
   on('session.start', async ($, e, next) => {
-    $.ui.status((await currentMode($, options)) + ' mode')
+    headless = e.isInteractive === false
+    if (!headless) $.ui.status((await currentMode($, options)) + ' mode')
     try {
       await $.command.register({ name: 'bouncer', description: 'Show prompt-bouncer, or switch it: /bouncer quick|project|off', argumentHint: '[quick|project|off]' })
       await $.command.register({ name: 'force', description: 'Send a prompt past prompt-bouncer', argumentHint: '<prompt>' })
@@ -60,7 +63,7 @@ export function register(on, options) {
     // Bounce: tell the user why (Claude Code puts the prompt back in the box to fix)
     bounces += 1
     // The toast shows the fix when there is one, else the reason
-    $.ui.toast('Bounced. ' + (verdict.suggestion || verdict.reason), { timeoutMs: 8000 })
+    if (!headless) $.ui.toast('Bounced. ' + (verdict.suggestion || verdict.reason), { timeoutMs: 8000 })
     // One line: a drop reason with newlines in it is mangled
     return { drop: 'prompt-bouncer: ' + verdict.reason + (verdict.suggestion ? ' Try: ' + verdict.suggestion : '') + ' (Send it anyway: /force <prompt>)' }
   }).catch(($, e, next) => next(e))
@@ -71,7 +74,7 @@ export function register(on, options) {
     const arg = e.args.trim()
     if (arg === 'quick' || arg === 'project' || arg === 'off') {
       modeOverride = arg
-      $.ui.status(arg + ' mode')
+      if (!headless) $.ui.status(arg + ' mode')
     }
     const docs = await loadDocs($, options)
     return { text: 'mode ' + (await currentMode($, options)) + ', ' + bounces + ' bounced this session. Project docs: ' + (docs.files.join(', ') || 'none found') + ' (' + docs.text.length + ' chars)' }

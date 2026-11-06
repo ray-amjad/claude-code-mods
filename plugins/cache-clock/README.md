@@ -12,13 +12,15 @@ Every request to the model writes the conversation to the prompt cache. If the n
 - The TTL is read from the session itself: the API records whether each cache write was a 1 hour or a 5 minute one, and the band says `measured` once it has seen one.
 - At the warning, if Claude is idle and you haven't replied, it acts while the cache is still warm. You pick what it does in the plugin's settings (`onWarning`):
   - `handoff` (the default): Claude writes a handoff note, `HANDOFF-<first 8 characters of the session id>.md`, in the project root, in case you don't come back. Each session has its own file, so parallel sessions in one folder don't overwrite each other.
-  - `compact`: the session compacts, as `/compact` does. The summary request reads the warm cache, so it is cheap, and your next message after the cache goes cold re-sends a few thousand tokens instead of the whole context.
   - `off`: just the toast.
 
   It runs once per idle stretch and re-arms when you send a message.
+- Want the session compacted instead? Use Claude Code's own idle compaction (2.1.299 and later, on by default): a conversation of 200K+ tokens left idle for about 54 minutes is compacted before its one-hour cache expires. Turn it on or off with `Idle compaction` in `/config`, and change the 200K minimum with `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`. The mod's own `compact` option is gone; a saved `compact` now acts as `off`.
 - `/cache-clock` prints the same line as text.
 
-The handoff is the only thing it sends to Claude: one short turn on a warm cache. Compact sends no turn; it is the same compaction `/compact` runs.
+Does nothing in -p / SDK sessions.
+
+The handoff is the only thing it sends to Claude: one short turn on a warm cache.
 
 ## Install
 
@@ -38,7 +40,7 @@ Or inside Claude Code: `/plugin marketplace add ray-amjad/claude-code-mods`, the
 | `CACHE_CLOCK_MAIN_TTL_MIN` | 60 | Main session TTL. Setting it pins it; otherwise the mod reads it from the transcript. |
 | `CACHE_CLOCK_SUB_TTL_MIN` | 5 | Subagent TTL |
 | `CACHE_CLOCK_WARN_MIN` | 5 | Toast, the onWarning action and the colour red when this much is left |
-| `CACHE_CLOCK_ON_WARNING` | the setting | `handoff`, `compact` or `off`; overrides the plugin setting |
+| `CACHE_CLOCK_ON_WARNING` | the setting | `handoff` or `off`; overrides the plugin setting |
 | `CACHE_CLOCK_AUTO_HANDOFF` | on | `0` means `off` (kept from older versions) |
 | `CACHE_CLOCK_HANDOFF_DIR` | project root | Folder the handoff notes go to |
 | `CACHE_CLOCK_SOUND` | off | `1` plays `sounds/cooling.wav` with the warning toast |
@@ -52,9 +54,10 @@ CACHE_CLOCK_MAIN_TTL_MIN=2 CACHE_CLOCK_WARN_MIN=1.5 claude
 ## How it works
 
 - Every `turn.step` (one per model request) restarts the main clock, or the `sub` clock when the step carries an `agentId`. A one second `$.clock.every` redraws the band and checks the warning.
+- `/recap` and `/btw` send the conversation to the model outside a turn, so no `turn.step` fires for them. Their request reads the main cache all the same, so a `command.run` hook on each restarts the main clock too, while the cache is still warm (a bare `/btw` sends nothing and is ignored).
 - After each turn it reads the end of the session transcript for the newest main-thread `usage.cache_creation`: tokens in `ephemeral_1h` mean 1 hour, `ephemeral_5m` mean 5 minutes. On `--resume` it seeds the clock from the session's `seconds_since_last_response`.
 - Context comes from `$.session.usage()` at start, then the pushed `session.measure` figures.
-- The warning action: when the warning fires, no turn is running (`turn.start`/`turn.complete`) and nothing has run since your last prompt, `handoff` calls `$.prompt.submit` and `compact` calls `$.session.compact`, then reads the smaller context back from `$.session.usage()`. A `prompt.submit` hook re-arms it on your next prompt.
+- The warning action: when the warning fires, no turn is running (`turn.start`/`turn.complete`) and nothing has run since your last prompt, `handoff` calls `$.prompt.submit`. A `prompt.submit` hook re-arms it on your next prompt.
 
 ## Limits
 

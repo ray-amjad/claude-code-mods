@@ -1,6 +1,6 @@
 {
   "name": "prompt-bouncer",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Bounces vague prompts before Claude sees them, and suggests the project's own term",
   "author": {
     "name": "Ray Amjad",

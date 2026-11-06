@@ -1,6 +1,6 @@
 {
   "name": "cache-clock",
-  "version": "0.4.1",
+  "version": "0.5.4",
   "description": "A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold",
   "author": {
     "name": "Ray Amjad",
@@ -12,10 +12,9 @@
     "onWarning": {
       "type": "string",
       "title": "When the cache is about to go cold",
-      "description": "What to do at the warning if you haven't replied. handoff: Claude writes a per-session HANDOFF-<id>.md. compact: the session compacts while the cache is warm, so your next message is a small write. off: just the toast.",
+      "description": "What to do at the warning if you haven't replied. handoff: Claude writes a per-session HANDOFF-<id>.md. off: just the toast. To compact instead, use Claude Code's own idle compaction (2.1.299+).",
       "options": [
         "handoff",
-        "compact",
         "off"
       ],
       "default": "handoff"

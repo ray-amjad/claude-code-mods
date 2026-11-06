@@ -21,6 +21,8 @@ const TOOL_GET = 'mcp__diagram-pane__diagram_get'
 const TOOL_SET = 'mcp__diagram-pane__diagram_set'
 const HOME = { root: 'map', path: [] }
 const NOTE = 'The map is drawn after a few turns, or now with /diagram'
+// Set at each session.start; true for -p / SDK sessions
+let headless = false
 
 // Everything the pane shows. Pins are rebuilt from the transcript; the map, the
 // edited pins and the view are also saved in $.store.
@@ -66,6 +68,9 @@ export function register(on, options) {
   S.maxPins = Number(options?.maxPins) || 5
 
   on('session.start', async ($, e, next) => {
+    // Set at each session.start. In -p / SDK sessions there is no pane to draw into
+    headless = e.isInteractive === false
+    if (headless) return next(e)
     // Open the pane right away. Unasked, it is placed on a wide terminal (144+ columns);
     // /diagram opens it at any width.
     await $.ui.open({ id: PANE, title: 'Diagrams' })
@@ -87,10 +92,12 @@ export function register(on, options) {
   // After each main turn: pin new diagrams, and every few turns refresh the map
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId || e.isAborted) return result
+    // Headless: no pane, so skip, unless DIAGRAM_PANE_SYNC or DIAGRAM_PANE_DUMP asks for the work
+    const asked = (await $.env.get('DIAGRAM_PANE_SYNC')) || (await $.env.get('DIAGRAM_PANE_DUMP'))
+    if ((headless && !asked) || e.agentId || e.isAborted) return result
     const messages = await sync($)
     S.sinceMap += 1
-    if (S.pins.length && !(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: 'Diagrams' })
+    if (!headless && S.pins.length && !(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: 'Diagrams' })
     S.every = Number(await $.env.get('DIAGRAM_PANE_EVERY')) || every
     if (S.sinceMap >= S.every || overdue()) {
       const work = overdue() ? catchUp($, messages) : refreshMap($, messages, false)

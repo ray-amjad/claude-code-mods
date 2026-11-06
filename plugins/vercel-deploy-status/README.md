@@ -8,6 +8,8 @@ It never starts a turn and never writes to the transcript. It polls the
 `vercel` CLI on your machine and draws the answer. You keep working, and the
 deploy sits in the corner of your eye.
 
+Does nothing in -p / SDK sessions.
+
 ## Install
 
 ```

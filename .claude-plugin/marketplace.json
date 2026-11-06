@@ -14,7 +14,7 @@
       "name": "cache-clock",
       "source": "./plugins/cache-clock",
       "description": "A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold",
-      "version": "0.4.1",
+      "version": "0.5.4",
       "author": {
         "name": "Ray Amjad"
       },
@@ -24,7 +24,7 @@
       "name": "decision-tree",
       "source": "./plugins/decision-tree",
       "description": "When Claude ends a reply with a question, explains the choice in a side pane and lets you explore any option, or your own, in a real forked session",
-      "version": "0.2.1",
+      "version": "0.2.3",
       "author": {
         "name": "Ray Amjad"
       },
@@ -34,7 +34,7 @@
       "name": "diagram-pane",
       "source": "./plugins/diagram-pane",
       "description": "A side pane that pins every diagram Claude draws, keeps a live map of the work, and lets you go into boxes and change them",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "author": {
         "name": "Ray Amjad"
       },
@@ -64,7 +64,7 @@
       "name": "memory-fork",
       "source": "./plugins/memory-fork",
       "description": "After each turn Haiku decides whether memory needs a change; a tool-less fork of the session drafts it and the mod writes it, with a band and a pane showing what changed",
-      "version": "0.3.1",
+      "version": "0.3.3",
       "author": {
         "name": "Ray Amjad"
       },
@@ -74,7 +74,7 @@
       "name": "prompt-bouncer",
       "source": "./plugins/prompt-bouncer",
       "description": "Bounces vague prompts before Claude sees them, and suggests the project's own term",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "author": {
         "name": "Ray Amjad"
       },
@@ -84,7 +84,7 @@
       "name": "secret-box",
       "source": "./plugins/secret-box",
       "description": "Claude can use a secret without seeing it: a masked box saves keys to .env and gives Claude a placeholder, every key a tool prints comes back as a placeholder, and committing .env is refused",
-      "version": "0.5.0",
+      "version": "0.5.6",
       "author": {
         "name": "Ray Amjad"
       },
@@ -94,7 +94,7 @@
       "name": "transcript-redactor",
       "source": "./plugins/transcript-redactor",
       "description": "Keeps secrets and email addresses out of the session transcript: swaps each one for a stable placeholder on the way in, and puts the real value back on the way into a tool call",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "author": {
         "name": "Ray Amjad"
       },
@@ -104,7 +104,7 @@
       "name": "vercel-deploy-status",
       "source": "./plugins/vercel-deploy-status",
       "description": "Pins the Vercel deploy queue of the linked project under the prompt: every deploy queued, building or just finished, with its phase and elapsed time",
-      "version": "1.0.2",
+      "version": "1.0.4",
       "author": {
         "name": "Ray Amjad"
       },

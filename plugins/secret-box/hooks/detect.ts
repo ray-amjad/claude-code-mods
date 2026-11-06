@@ -952,6 +952,13 @@ function looksSecret(token: string, before: string, cfg: Config): boolean {
   // a public id. Each `+` part has to be one, so base64 is still judged.
   if (token.includes('+') && token.split('+').every((p) => p === '' || WORD_PART.test(p) || isPublicId(p, named, cfg))) return false
   if (named && SESSION_UUID.test(token) && SESSION_ID_NAME.test(before)) return false
+  // An MCP tool name (`mcp__<server>__<tool>`) joins two names, and the
+  // server's can hold a UUID. Judged whole it reads as a mixed-case key, and
+  // a hidden tool name can't be loaded or called. Each part is judged alone.
+  if (token.startsWith('mcp__')) {
+    const parts = token.slice(5).split('__')
+    if (parts.length >= 2 && parts.every(Boolean)) return parts.some((p) => looksSecret(p, before, cfg))
+  }
   if (looksLikeName(token, named)) return false
 
   const h = entropy(token)

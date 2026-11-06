@@ -648,6 +648,17 @@ const genPw = (n: number): string => mixed(n, B62 + '!#$%&*()-_=+[]{}<>:?', [LOW
   hide('R17 word, number, random is still hidden', `value ${numbered} here`, numbered.slice(16))
 }
 
+// MCP tool names whose server name holds a UUID.
+{
+  const server = uuid()
+  keep('mcp tool, uuid server', `mcp__${server}__getJiraIssue\nmcp__${server}__searchJiraIssuesUsingJql`)
+  keep('mcp tool, bare uuid server', `select:mcp__${server.replaceAll('-', '')}__executeRead`)
+  keep('mcp tool, snake uuid server', `"name": "mcp__${server.replaceAll('-', '_')}__get_issue"`)
+  const key = mixed(32)
+  hide('mcp tool, random server is still hidden', `mcp__${key}__getJiraIssue`, key)
+  hide('mcp tool, random tool is still hidden', `mcp__jira__${key}`, key)
+}
+
 // --------------------------------------------------------------- the checks
 
 let bad = 0

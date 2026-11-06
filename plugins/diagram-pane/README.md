@@ -6,6 +6,8 @@ A Claude Code mod that opens a side pane with a live picture of the work: every 
 
 Claude explains things with mermaid charts, but in a terminal you only see the raw code, and it scrolls away. Meanwhile the shape of the work (which files, which steps, what connects to what) lives only in Claude's context. This pane shows you both.
 
+Does nothing in -p / SDK sessions, unless `DIAGRAM_PANE_SYNC` or `DIAGRAM_PANE_DUMP` is set (see below).
+
 - **Pinned diagrams.** Whenever a reply has a mermaid code block or an ASCII box diagram, it is pinned in the pane, newest first. Mermaid flowcharts are redrawn as boxes and arrows that fit a 60 column pane.
 - **Live work map.** Every few turns (and on `/diagram`) a cheap Haiku call asks whether the work changed shape. Only on yes does a fork of the session return a small graph of the files, components and steps it is working on, and the pane draws it. The node Claude is on right now is marked `▶`.
 - **Go into a box.** Boxes are numbered. Press a number to open that box's detail: a mermaid `subgraph` opens at once, and any other box gets a detail drawn by a fork of the session. `b` goes back, `t` to the top. A box marked `▸` already has a detail.
