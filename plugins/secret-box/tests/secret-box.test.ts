@@ -149,8 +149,9 @@ test('a .env file that cannot be checked still runs, and is scanned', async ($, 
 
 // git answers per subcommand: `index` for what is staged, `tree` for what is
 // changed or untracked, `fails` for a git call that errors. `argvs` keeps every call.
-// `repos`, when given, are the only -C directories git can read; `env` is the environment.
-function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; env?: Record<string, string> }) {
+// `repos`, when given, are the only -C directories git can read, and `dirty`
+// is the one whose index holds a .env; `env` is the environment.
+function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; env?: Record<string, string> }) {
   on('tool.call', () => ({ result: 'ran' }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('fs.exists', () => ({ value: false }))
@@ -161,7 +162,7 @@ function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean
     if (opts.fails || (opts.repos && dir && !opts.repos.includes(dir))) {
       return { value: { exitCode: 128, stdout: '', stderr: `fatal: cannot change to '${dir}': No such file or directory` } }
     }
-    const stdout = e.argv.includes('ls-files') ? opts.tree ?? '' : opts.index ?? ''
+    const stdout = e.argv.includes('ls-files') ? opts.tree ?? '' : dir && dir === opts.dirty ? '.env\n' : opts.index ?? ''
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
 }
@@ -226,6 +227,35 @@ test('a .env that git add -A would stage in a -C "$W" repository is still blocke
   const r = await call($, { tool: 'Bash', command: `W="${DIR}"; git -C "$W" add -A && git -C "$W" commit -m msg` })
   expect(r.deny).toContain('could stage and commit .env')
 })
+
+// The commit runs in /unsafe, where .env is staged. A W=/safe that may never
+// run, or sits in text, must not stand in for it: every value is checked.
+const UNSAFE = '/unsafe'
+for (const [name, command] of [
+  ['an assignment after false &&', `W=${UNSAFE}; false && W=/safe; git -C "$W" commit -m msg`],
+  ['an assignment in a quoted message read as code', `W=${UNSAFE}; git commit -m 'W=/safe; git commit'; git -C "$W" commit -m msg`],
+  ['an assignment in an if branch', `W=${UNSAFE}; if false; then W=/safe; fi; git -C "$W" commit -m msg`],
+  ['an assignment in a subshell', `W=${UNSAFE}; (W=/safe); git -C "$W" commit -m msg`],
+  ['an assignment after the git call, in a loop', `W=${UNSAFE}; for i in 1 2; do git -C "$W" commit -m msg; W=/safe; done`],
+  ['an assignment through another variable', `S=/safe; U=${UNSAFE}; W=$U; true || W=$S; git -C "$W" commit -m msg`],
+] as const) {
+  test(`a .env commit is blocked despite ${name}`, async ($, on) => {
+    gitStub(on, { repos: [UNSAFE, '/safe'], dirty: UNSAFE })
+    const r = await call($, { tool: 'Bash', command })
+    expect(r.deny).toContain('would include a .env file')
+  })
+}
+
+// W may hold anything from the shell when the only W= might not run
+for (const command of ['false && W=/safe; git -C "$W" commit -m msg', 'git commit -m "W=/safe; git commit"; git -C "$W" commit -m msg', 'git -C "$W" commit -m msg; W=/safe']) {
+  test(`a -C variable with no assignment that surely runs first is unresolved: ${command}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, repos: ['/safe'] })
+    const r = await call($, { tool: 'Bash', command })
+    expect(r.deny).toContain("couldn't resolve the git -C directory")
+    expect(argvs.some(a => a[2] === '/safe')).toBe(false)
+  })
+}
 
 for (const command of ['git -C "$UNSET" commit -m msg', 'git -C $UNSET commit -m msg', 'W=$(pwd)/sub; git -C $W commit -m msg', 'for W in a b; do git -C $W commit -m msg; done']) {
   test(`a -C directory that can't be resolved is blocked, and says so: ${command}`, async ($, on) => {

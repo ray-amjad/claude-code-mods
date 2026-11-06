@@ -273,6 +273,9 @@ function shellCommands(src) {
     let words = []
     let word = null
     let depth = 0
+    // Whether the next command surely runs once its turn comes: it starts the
+    // command or follows ; or a newline, outside ( ) and $( )
+    let sureNext = true
     const heredocs = []
     const begin = () => { word ??= { parts: [], start: i } }
     const part = (p) => {
@@ -287,12 +290,15 @@ function shellCommands(src) {
     }
     const endCmd = () => {
       endWord()
-      if (words.length) out.push(words)
+      if (words.length) {
+        words.sure = sureNext && depth === 0 && !inSub
+        out.push(words)
+      }
       words = []
     }
     // A quoted string or heredoc body that runs git is shell code: read it too
     const nested = (text) => {
-      if (gitRuns(text, 'commit|add|stage')) out.push(...shellCommands(text))
+      if (gitRuns(text, 'commit|add|stage')) out.push(...unsure(shellCommands(text)))
     }
     const subst = () => {
       // at "$(": read the commands up to the matching ")"
@@ -336,7 +342,7 @@ function shellCommands(src) {
       let body = ''
       for (i++; i < src.length && src[i] !== '`'; i++) body += src[i] === '\\' && i + 1 < src.length ? src[++i] : src[i]
       i++
-      out.push(...shellCommands(body))
+      out.push(...unsure(shellCommands(body)))
       part({ sub: src.slice(start, i) })
     }
     const readHeredocs = () => {
@@ -357,6 +363,7 @@ function shellCommands(src) {
       const ch = src[i]
       if (ch === '\n') {
         endCmd()
+        sureNext = true
         i++
         readHeredocs()
       } else if (ch === ' ' || ch === '\t' || ch === '\r') {
@@ -371,6 +378,7 @@ function shellCommands(src) {
         if (ch === '(') depth++
         if (ch === ')') depth--
         endCmd()
+        sureNext = ch === ';'
         i++
       } else if (src.startsWith('<<', i) && src[i + 2] !== '<') {
         // a heredoc: its body starts on the next line, and is not shell code
@@ -452,38 +460,105 @@ function shellCommands(src) {
   return out
 }
 
+// Commands read out of a quoted string, a heredoc or backticks may never run
+function unsure(cmds) {
+  for (const c of cmds) c.sure = false
+  return cmds
+}
+
 // A word that is only literal text, as the command will see it
 function literal(word) {
   return word.parts.every(p => p.lit !== undefined) ? word.parts.map(p => p.lit).join('') : null
 }
 
-// The text a word expands to, from the variables set earlier in the command
-// (and HOME). null when it can't be known: $(..), a variable set elsewhere.
-async function expand($, word, vars) {
-  let text = ''
+// Every text a word could expand to, from what the command assigns (and
+// HOME); null when one of them can't be known: $(..), a variable set elsewhere.
+async function expand($, word, vars, at, seen = new Set()) {
+  let texts = ['']
   for (const [n, p] of word.parts.entries()) {
+    let options
     if (p.lit !== undefined) {
       // ~ at the start of an unquoted word is the home folder
       if (n === 0 && !p.q && /^~(\/|\\|$)/.test(p.lit)) {
-        const home = await envVar($, vars, 'HOME')
-        if (home == null) return null
-        text += home + p.lit.slice(1)
-      } else text += p.lit
+        const home = await values($, vars, 'HOME', at, seen)
+        if (!home) return null
+        options = home.map(h => h + p.lit.slice(1))
+      } else options = [p.lit]
     } else if (p.name !== undefined) {
-      const v = await envVar($, vars, p.name)
-      if (v == null) return null
-      text += v
+      options = await values($, vars, p.name, at, seen)
+      if (!options) return null
     } else return null
+    texts = texts.flatMap(t => options.map(o => t + o))
+    if (texts.length > MAX_DIRS) return null
   }
-  return text
+  return [...new Set(texts)]
+}
+const MAX_DIRS = 16
+
+// Every value a variable could hold at command `at`: each value the command
+// assigns it anywhere, plus the value it had before when no assignment has
+// surely run by then. A hook reads only the environment variables it names,
+// so HOME is the one known from outside the command.
+async function values($, vars, name, at, seen) {
+  const own = vars.get(name)
+  const out = []
+  if (own) {
+    if (seen.has(name)) return null // W=$W/x
+    for (const w of own.words) {
+      const v = w && (await expand($, w, vars, at, new Set([...seen, name])))
+      if (!v) return null
+      out.push(...v)
+    }
+    if (own.sureAt < at) return [...new Set(out)]
+  }
+  if (name !== 'HOME') return null
+  try {
+    const home = await $.env.get('HOME')
+    return home == null ? null : [...new Set([...out, home])]
+  } catch { return null }
 }
 
-// A hook reads only the environment variables it names, so HOME is the one
-// known outside the command; any other variable can't be known here.
-async function envVar($, vars, name) {
-  if (vars.has(name)) return vars.get(name)
-  if (name !== 'HOME') return null
-  try { return (await $.env.get('HOME')) ?? null } catch { return null }
+// What a command assigns: name -> every value word given to it anywhere
+// (null for a value that can't be known). Not in order and never replaced:
+// `false && W=/x`, a loop, or `W=` in a message read as code may or may not
+// run, so the guard checks every directory a -C could be.
+function assignments(cmds) {
+  const vars = new Map()
+  // sureAt: the first command index where an assignment has surely run
+  const add = (name, word, at) => {
+    if (!name) return
+    if (!vars.has(name)) vars.set(name, { words: [], sureAt: Infinity })
+    const v = vars.get(name)
+    v.words.push(word)
+    if (at !== undefined) v.sureAt = Math.min(v.sureAt, at)
+  }
+  const assignment = w => !w.parts[0].q && w.parts[0].lit?.match(/^([A-Za-z_]\w*)=/)
+  for (const [at, all] of cmds.entries()) {
+    // then W=/x, do W=/x ...: inside a branch or a loop
+    const lead = all.findIndex(w => !/^(if|then|elif|else|do|while|until|!|\{|time)$/.test(literal(w) ?? ''))
+    if (lead < 0) continue
+    const words = all.slice(lead)
+    const first = literal(words[0]) ?? ''
+    // W=/x, W=/x git ..., export / declare / local / readonly W=/x. Only an
+    // assignment alone, run for sure, sets W for what follows; W=/x git ...
+    // sets it for that git only, which still expands $W to the old value.
+    const isDeclare = /^(export|declare|typeset|local|readonly)$/.test(first)
+    const sure = all.sure && lead === 0 && (isDeclare || words.every(assignment)) ? at : undefined
+    for (const w of isDeclare ? words.slice(1) : words) {
+      const m = assignment(w)
+      if (!m) {
+        if (isDeclare) continue
+        break
+      }
+      add(m[1], { parts: [{ ...w.parts[0], lit: w.parts[0].lit.slice(m[0].length) }, ...w.parts.slice(1)] }, sure)
+    }
+    // A loop, unset or read sets a variable to something the command can't tell
+    if (/^(for|select)$/.test(first) && words[1]) add(literal(words[1]), null, at)
+    if (/^(unset|read|mapfile|readarray|getopts)$/.test(first)) {
+      for (const w of words.slice(1)) if (!/^-/.test(literal(w) ?? '-')) add(literal(w), null, at)
+    }
+  }
+  return vars
 }
 
 // The repositories a command's git calls run in: each `git -C <dir>`, and the
@@ -491,31 +566,13 @@ async function envVar($, vars, name) {
 // worked out comes back as { unresolved: the text as written }.
 async function gitDirs($, cmd) {
   const dirs = new Map()
-  // Variables set by the command itself before the git call: W=/x; export W=/x
-  const vars = new Map()
-  for (const words of shellCommands(cmd)) {
-    const first = literal(words[0]) ?? ''
-    const assignment = w => !w.parts[0].q && w.parts[0].lit?.match(/^([A-Za-z_]\w*)=/)
-    // `W=/x` alone sets W for the rest of the command; `W=/x git ...` only
-    // for that git, which still expands $W to the old value
-    const isDeclare = /^(export|declare|typeset|local|readonly)$/.test(first)
-    if (isDeclare || words.every(assignment)) {
-      for (const w of words) {
-        const m = assignment(w)
-        if (!m) continue
-        const rest = { parts: [{ ...w.parts[0], lit: w.parts[0].lit.slice(m[0].length) }, ...w.parts.slice(1)] }
-        vars.set(m[1], await expand($, rest, vars))
-      }
-      continue
-    }
-    // A loop or `unset` makes a variable something the command can't tell
-    if (/^(for|select)$/.test(first) && words[1]) vars.set(literal(words[1]), null)
-    if (first === 'unset') for (const w of words.slice(1)) vars.set(literal(w), null)
-
+  const cmds = shellCommands(cmd)
+  const vars = assignments(cmds)
+  for (const [index, words] of cmds.entries()) {
     // git, git.exe or a path to it; then its global options, up to the subcommand
     const at = words.findIndex(w => /(^|[\\/])git(\.exe)?$/i.test(literal(w) ?? ''))
     if (at < 0) continue
-    let dir = ''
+    let found = ['']
     let unresolved = null
     for (let k = at + 1; k < words.length; k++) {
       const opt = literal(words[k])
@@ -527,13 +584,17 @@ async function gitDirs($, cmd) {
       else if (opt === '-c' || /^--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)$/.test(opt ?? '')) k++
       else if (!/^-/.test(opt ?? words[k].parts[0].lit ?? '')) break
       if (!value) continue
-      const text = await expand($, value, vars)
-      if (text == null) unresolved ??= value.raw || '?'
+      const texts = await expand($, value, vars, index)
+      if (!texts) {
+        unresolved ??= value.raw || '?'
+        continue
+      }
       // git -C a -C b runs in a/b; an absolute -C starts over
-      else dir = !dir || isAbsolute(text) || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text
+      found = found.flatMap(dir => texts.map(text => (!dir || isAbsolute(text) || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text)))
+      if (found.length > MAX_DIRS) unresolved ??= value.raw || '?'
     }
     if (unresolved !== null) dirs.set('?' + unresolved, { unresolved })
-    else dirs.set(dir, dir)
+    else for (const dir of found) dirs.set(dir, dir)
   }
   // gitRuns saw a commit, but no git call came out here: check the session's repository
   if (dirs.size === 0) dirs.set('', '')
@@ -575,7 +636,7 @@ async function commitBlockReason($, cmd) {
   // doesn't read like a found secret
   const unsure = 'No .env file was found; the guard blocks a commit it cannot check. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
   for (const dir of await gitDirs($, cmd)) {
-    if (typeof dir !== 'string') return `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable or substitution this command does not set itself). ${unsure}`
+    if (typeof dir !== 'string') return `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
     const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])
     const checks = [git('diff', '--cached', '--name-only')]
     if (stages) checks.push(git('ls-files', '--modified', '--others', '--exclude-standard'))
