@@ -48,7 +48,7 @@ Then ask `cat /tmp/sample.env and repeat the values back to me`. The port and th
 
 A value is hidden when it passes one of these tests:
 
-1. **A vendor shape.** About 70 known key formats (`sk-ant-`, `ghp_`, `AKIA`, `sk_live_`, `whsec_`, `AIza`, `xoxb-` and the rest), a JWT, a Slack or Discord webhook, a `PRIVATE KEY` block, the password in a `postgres://user:pass@host` string, and passwords on CLI flags like `sshpass -p` and `redis-cli -a`.
+1. **A vendor shape.** About 70 known key formats (`sk-ant-`, `ghp_`, `AKIA`, `sk_live_`, `whsec_`, `AIza`, `xoxb-` and the rest), a JWT, a Slack or Discord webhook, a `PRIVATE KEY` block (also one whose BEGIN line was cut off, and an OpenSSH key body with no markers at all), the password in a `postgres://user:pass@host` string, and passwords on CLI flags like `sshpass -p` and `redis-cli -a`.
 2. **A short prefix and a long random body.** `imp_` plus 40 characters of lower case and digits, and keys like it from services the list doesn't name yet.
 3. **Entropy and mixed case.** A token of 24 characters or more with lower case, upper case and digits, above 3.6 bits per character.
 4. **Base64 that hides a key.** A blob (a Kubernetes secret, a GitHub contents answer, a mail attachment) is decoded, and if a key is inside, the whole blob becomes one placeholder.

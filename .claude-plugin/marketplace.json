@@ -84,7 +84,7 @@
       "name": "secret-box",
       "source": "./plugins/secret-box",
       "description": "Claude can use a secret without seeing it: a masked box saves keys to .env and gives Claude a placeholder, every key a tool prints comes back as a placeholder, and committing .env is refused",
-      "version": "0.5.7",
+      "version": "0.5.8",
       "author": {
         "name": "Ray Amjad"
       },
@@ -94,7 +94,7 @@
       "name": "transcript-redactor",
       "source": "./plugins/transcript-redactor",
       "description": "Keeps secrets and email addresses out of the session transcript: swaps each one for a stable placeholder on the way in, and puts the real value back on the way into a tool call",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "author": {
         "name": "Ray Amjad"
       },
