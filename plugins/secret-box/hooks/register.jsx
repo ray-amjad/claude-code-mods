@@ -626,6 +626,10 @@ async function gitDirs($, cmd) {
   for (const [index, words] of cmds.entries()) {
     const lead = words.findIndex(w => !LEADS.test(literal(w) ?? '') && !isAssignment(w))
     const moved = lead >= 0 && CD.test(literal(words[lead]) ?? '') ? await cdTargets($, words.slice(lead), vars, index) : undefined
+    // eval cd ... moves this shell to a place its text alone can't show
+    if (lead >= 0 && literal(words[lead]) === 'eval' && words.slice(lead + 1).some(w => /(^|[\s;&|("'])(cd|pushd|popd)\b/.test(w.raw))) {
+      cur = uniq([...cur, { unresolved: unquoted(words.slice(lead).map(w => w.raw).join(' ')), kind: 'cd' }])
+    }
     if (moved) {
       const there = capped(cur.flatMap(dir => moved.map(to => join(dir, to))), words[lead + 1]?.raw)
       // Only `cd X && ...`, run in this shell with nothing before it that
@@ -719,7 +723,7 @@ async function cdTargets($, words, vars, at) {
 
 // dir, then text on top of it: an absolute text starts over, '' stays
 function join(dir, text) {
-  if (isAbsolute(text)) return text
+  if (typeof text !== 'string' || isAbsolute(text)) return text
   if (typeof dir !== 'string') return dir
   return !dir || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text
 }

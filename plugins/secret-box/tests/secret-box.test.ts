@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { isAbsolute, isEnvFile, isNotFound, WAITS } from '../hooks/register'
+import { fromMsys, isAbsolute, isEnvFile, isNotFound, WAITS } from '../hooks/register'
 
 // Fake keys, built at run time so no key-shaped string sits in the repo
 const STRIPE = 'sk_' + 'live_' + 'A1b2C3d4E5f6G7h8J9k0L1m2'
@@ -165,10 +165,12 @@ test('a .env file that cannot be checked still runs, and is scanned', async ($, 
 // git answers per subcommand: `index` for what is staged, `tree` for what is
 // changed or untracked, `fails` for a git call that errors. `argvs` keeps every call.
 // `repos`, when given, are the only -C directories git can read, and `dirty`
-// is the one whose index holds a .env; `env` is the environment.
-function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; env?: Record<string, string> }) {
+// is the one whose index holds a .env ('' the session's), `untracked` the one
+// with an untracked .env; `env` is the environment, `cwd` the session's
+// directory, and `outside` puts it outside any repository.
+function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; outside?: boolean }) {
   on('tool.call', () => ({ result: 'ran' }))
-  on('session.cwd', () => ({ value: '/repo' }))
+  on('session.cwd', () => ({ value: opts.cwd ?? '/repo' }))
   on('fs.exists', () => ({ value: false }))
   on('env.get', (_$: unknown, e: { name: string }) => ({ value: opts.env?.[e.name] }))
   on('process.run', (_$: unknown, e: { argv: string[] }) => {
@@ -177,7 +179,12 @@ function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean
     if (opts.fails || (opts.repos && dir && !opts.repos.includes(dir))) {
       return { value: { exitCode: 128, stdout: '', stderr: `fatal: cannot change to '${dir}': No such file or directory` } }
     }
-    const stdout = e.argv.includes('ls-files') ? opts.tree ?? '' : dir && dir === opts.dirty ? '.env\n' : opts.index ?? ''
+    if (!dir && opts.outside) {
+      return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' } }
+    }
+    const stdout = e.argv.includes('ls-files')
+      ? (opts.untracked !== undefined && dir === opts.untracked ? '.env\n' : opts.tree ?? '')
+      : opts.dirty !== undefined && dir === opts.dirty ? '.env\n' : opts.index ?? ''
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
 }
@@ -369,4 +376,195 @@ test('the box waits with sleep on Mac and Linux, and with node, else ping, on Wi
   expect(WAITS.windows.map(w => w[0])).toEqual(['node', 'ping'])
   expect(isNotFound(new Error("$.process.run(node) failed to start: ENOENT: Command 'node' not found"))).toBe(true)
   expect(isNotFound(new Error('timed out'))).toBe(false)
+})
+
+// #34: a cd or pushd before git moves it like -C. The session sits outside any
+// repository, as in the issue. Each case: the command, the directories git is
+// asked about ('' the session's own).
+const dirsAsked = (argvs: string[][]) => [...new Set(argvs.map(a => (a[1] === '-C' ? a[2] : '')))].sort()
+const REPRO = 'cd /e/myrepo && git add file.txt && git commit -m "msg"'
+const CD_DIRS: [string, string, string[]][] = [
+  ['the command from the issue', REPRO, ['/e/myrepo']],
+  ['cd X && git commit', `cd ${DIR} && git commit -m msg`, [DIR]],
+  ['pushd X && git commit', `pushd ${DIR} && git commit -m msg && popd`, [DIR]],
+  ['cd with options', `cd -P -- ${DIR} && git commit -m msg`, [DIR]],
+  ['a relative cd joins onto the one before', `cd /path && cd to/repo && git commit -m msg`, [DIR]],
+  ['a relative cd from the session directory', 'cd sub && git commit -m msg', ['sub']],
+  ['a -C on top of a cd', 'cd /path && git -C to/repo commit -m msg', [DIR]],
+  ['an absolute -C after a cd', `cd /elsewhere && git -C ${DIR} commit -m msg`, [DIR]],
+  ['cd "$W" with W set earlier', `W=${DIR}; cd "$W" && git add f && git commit -m msg`, [DIR]],
+  ['cd ~/repo', 'cd ~/repo && git commit -m msg', [DIR]],
+  ['a bare cd goes to HOME', 'cd && git -C repo commit -m msg', [DIR]],
+  ['git commit text in the message', `cd ${DIR} && git commit -m "git commit: fix git add"`, [DIR]],
+  ['a substitution in the message', `cd ${DIR} && git commit -m "$(printf 'a'; echo b)"`, [DIR]],
+  ['a heredoc message', `cd ${DIR} && git commit -m "$(cat <<'EOF'\nfix: cd and git -C\nEOF\n)"`, [DIR]],
+  ['a cd after an earlier && step', `echo start && cd ${DIR} && git commit -m msg`, [DIR]],
+  ['a cd on a continued line', `cd ${DIR} &&\n  git commit -m msg`, [DIR]],
+  ['pushd -n does not move', `pushd -n /elsewhere && git commit -m msg`, ['']],
+]
+for (const [name, command, asked] of CD_DIRS) {
+  test(`a cd before git is checked where it moves: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, cwd: '/scratch', outside: !asked.includes(''), repos: [DIR, '/e/myrepo', 'sub'], env: { HOME: '/path/to' } })
+    const r = await call($, { tool: 'Bash', command })
+    expect(r.deny).toBeUndefined()
+    expect(dirsAsked(argvs)).toEqual(asked)
+  })
+}
+
+// A cd that may not have run (a ; or newline after it, ||, a body, a
+// subshell, a pipe, quoted code) leaves git in either place: check both
+const CD_UNSURE: [string, string][] = [
+  ['a ; after the cd', `cd ${DIR}; git commit -m msg`],
+  ['a newline after the cd', `cd ${DIR}\ngit commit -m msg`],
+  ['|| after the cd', `cd ${DIR} || echo no; git commit -m msg`],
+  ['git after || on the cd', `cd ${DIR} || git commit -m msg`],
+  ['a cd after ||', `true || cd ${DIR} && git commit -m msg`],
+  ['a ; later in the chain', `cd ${DIR} && true; git commit -m msg`],
+  ['a cd inside if', `if true; then cd ${DIR}; fi; git commit -m msg`],
+  ['a cd as an if condition', `if cd ${DIR}; then git commit -m msg; fi`],
+  ['a cd inside a loop', `for i in 1; do cd ${DIR}; done; git commit -m msg`],
+  ['a cd in a subshell', `(cd ${DIR} && git commit -m msg)`],
+  ['a cd in a subshell, git after it', `(cd ${DIR}) && git commit -m msg`],
+  ['a cd after a pipe', `true | cd ${DIR} && git commit -m msg`],
+  ['a cd piped on', `cd ${DIR} | cat && git commit -m msg`],
+  ['a cd in the background', `cd ${DIR} & git commit -m msg`],
+  ['a cd in bash -c code', `bash -c 'cd ${DIR} && git commit -m msg'`],
+  ['a cd in a substitution', `x=$(cd ${DIR} && pwd) && git commit -m msg`],
+  ['builtin cd', `builtin cd ${DIR} && git commit -m msg`],
+]
+for (const [name, command] of CD_UNSURE) {
+  test(`a cd that may not have run checks both directories: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, repos: [DIR] })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+    expect(dirsAsked(argvs)).toEqual(['', DIR])
+  })
+  test(`a .env staged in the session directory is still blocked: ${name}`, async ($, on) => {
+    gitStub(on, { repos: [DIR], dirty: '' })
+    expect((await call($, { tool: 'Bash', command })).deny).toContain('would include a .env file')
+  })
+  test(`a .env staged where the cd goes is still blocked: ${name}`, async ($, on) => {
+    gitStub(on, { repos: [DIR], dirty: DIR })
+    expect((await call($, { tool: 'Bash', command })).deny).toContain('would include a .env file')
+  })
+}
+
+for (const [command, shown] of [
+  ['cd - && git commit -m msg', 'cd -'],
+  ['cd "$UNSET" && git commit -m msg', 'cd $UNSET'],
+  ['cd "$(pwd)/sub" && git commit -m msg', 'cd $(pwd)/sub'],
+  ['cd ~bob/repo && git commit -m msg', 'cd ~bob/repo'],
+  ['popd && git commit -m msg', 'popd'],
+  ['pushd && git commit -m msg', 'pushd'],
+  ['pushd +1 && git commit -m msg', 'pushd +1'],
+  ['cd && git commit -m msg', 'cd (HOME is not known)'],
+  ['W=$(pwd); cd $W && git commit -m msg', 'cd $W'],
+] as const) {
+  test(`a cd directory that can't be resolved is blocked, and says so: ${command}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs })
+    const r = await call($, { tool: 'Bash', command })
+    expect(r.deny).toContain(`couldn't resolve the directory \`${shown}\` moves to before git runs`)
+    expect(r.deny).toContain('This is not a detected .env: the guard could not check this commit')
+    expect(argvs.length).toBe(0)
+  })
+}
+
+test('an unresolved cd that may not have run is still blocked', async ($, on) => {
+  gitStub(on, {})
+  expect((await call($, { tool: 'Bash', command: 'cd "$UNSET"; git commit -m msg' })).deny).toContain("couldn't resolve the directory `cd $UNSET`")
+})
+
+test('an eval that runs cd is blocked: where it goes is not known', async ($, on) => {
+  gitStub(on, {})
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR} && eval "cd sub" && git commit -m msg` })).deny).toContain("couldn't resolve the directory `eval cd sub` moves to before git runs")
+})
+
+test('an unresolved cd after the commit does not block it', async ($, on) => {
+  gitStub(on, {})
+  expect((await call($, { tool: 'Bash', command: 'git commit -m msg && cd -' })).deny).toBeUndefined()
+})
+
+test('an absolute -C overrides an unresolved cd', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, repos: [DIR] })
+  expect((await call($, { tool: 'Bash', command: `cd "$UNSET" && git -C ${DIR} commit -m msg` })).deny).toBeUndefined()
+  expect(dirsAsked(argvs)).toEqual([DIR])
+})
+
+// The same command still refuses a .env in the repository it moves to
+test('cd X && git add .env && git commit is blocked', async ($, on) => {
+  gitStub(on, { repos: [DIR], outside: true })
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR} && git add .env && git commit -m msg` })).deny).toContain('staging a .env file is blocked')
+})
+
+test('cd X && git add -A && git commit is blocked with an untracked .env in X', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, repos: [DIR], untracked: DIR, outside: true })
+  const r = await call($, { tool: 'Bash', command: `cd ${DIR} && git add -A && git commit -m msg` })
+  expect(r.deny).toContain('could stage and commit .env')
+  expect(argvs.some(a => a.join(' ') === `git -C ${DIR} ls-files --modified --others --exclude-standard`)).toBe(true)
+})
+
+test('cd X && git commit is blocked with a .env staged in X', async ($, on) => {
+  gitStub(on, { repos: [DIR], dirty: DIR, outside: true })
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR} && git commit -m msg` })).deny).toContain('would include a .env file')
+})
+
+// git.exe is run directly on Windows, so a Git Bash path becomes a drive path
+const MSYS: [string, string, string][] = [
+  ['the command from the issue', REPRO, 'E:/myrepo'],
+  ['a /cygdrive path', 'cd /cygdrive/e/x && git commit -m msg', 'E:/x'],
+  ['a -C path', 'git -C /e/myrepo commit -m msg', 'E:/myrepo'],
+  ['a drive root, then -C', 'cd /e && git -C myrepo commit -m msg', 'E:/myrepo'],
+  ['a drive path as it is', 'cd E:/myrepo && git commit -m msg', 'E:/myrepo'],
+]
+for (const [name, command, dir] of MSYS) {
+  test(`on Windows an MSYS path is given to git as a drive path: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, repos: [dir], outside: true, cwd: 'C:\\scratch', env: { OS: 'Windows_NT' } })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+    expect(dirsAsked(argvs)).toEqual([dir])
+  })
+}
+
+test('off Windows an MSYS-shaped path stays as it is', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, repos: ['/e/myrepo'], outside: true, cwd: '/scratch' })
+  expect((await call($, { tool: 'Bash', command: REPRO })).deny).toBeUndefined()
+  expect(dirsAsked(argvs)).toEqual(['/e/myrepo'])
+})
+
+test('fromMsys turns only a drive-letter path', async () => {
+  expect(fromMsys('/e/myrepo')).toBe('E:/myrepo')
+  expect(fromMsys('/c')).toBe('C:/')
+  expect(fromMsys('/cygdrive/d/a b')).toBe('D:/a b')
+  for (const p of ['/tmp', '/ee/x', '/cygdrive', 'C:/x', 'sub/e', '']) expect(fromMsys(p)).toBe(p)
+})
+
+// When git can't read a directory, the message names the one it tried
+test('a session directory outside a repository is named in the message', async ($, on) => {
+  gitStub(on, { outside: true, cwd: '/scratch' })
+  const r = await call($, { tool: 'Bash', command: 'git commit -m msg' })
+  expect(r.deny).toContain("couldn't read git state in /scratch (the session directory) (git: fatal: not a git repository")
+  expect(r.deny).toContain('This is not a detected .env')
+})
+
+test('a cd directory git cannot read is named in the message', async ($, on) => {
+  gitStub(on, { repos: [DIR], cwd: '/scratch' })
+  const r = await call($, { tool: 'Bash', command: 'cd /nowhere && git commit -m msg' })
+  expect(r.deny).toContain("couldn't read git state in /nowhere (git: fatal: cannot change to '/nowhere'")
+})
+
+test('a relative cd directory is named with the session directory it is under', async ($, on) => {
+  gitStub(on, { repos: [DIR], cwd: '/scratch' })
+  const r = await call($, { tool: 'Bash', command: 'cd nowhere && git commit -m msg' })
+  expect(r.deny).toContain("couldn't read git state in nowhere (under /scratch)")
+})
+
+test('a converted Windows directory is named as given to git', async ($, on) => {
+  gitStub(on, { repos: [DIR], cwd: 'C:\\scratch', env: { OS: 'Windows_NT' } })
+  const r = await call($, { tool: 'Bash', command: 'cd /e/gone && git commit -m msg' })
+  expect(r.deny).toContain("couldn't read git state in E:/gone")
 })
