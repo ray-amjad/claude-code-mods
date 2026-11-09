@@ -626,6 +626,14 @@ async function gitDirs($, cmd) {
   // chain, and the command after the next ; newline or || runs there
   let cur = ['']
   let failed = []
+  // bash keeps the directory as text (cd -L, its default) or as the disk
+  // resolved it (cd -P, or every cd after set -P). `physical` holds the
+  // directories whose text bash resolved; `plain` those it kept as text.
+  // `mode` is what a cd with no -L or -P does: 'L', 'P', or 'both' when a
+  // set -P may or may not have run.
+  const physical = new Set()
+  const plain = new Set([''])
+  let mode = 'L'
   for (const [index, words] of cmds.entries()) {
     const lead = words.findIndex(w => !LEADS.test(literal(w) ?? '') && !isAssignment(w))
     const moved = lead >= 0 && CD.test(literal(words[lead]) ?? '') ? await cdTargets($, words.slice(lead), vars, index) : undefined
@@ -633,8 +641,47 @@ async function gitDirs($, cmd) {
     if (lead >= 0 && literal(words[lead]) === 'eval' && words.slice(lead + 1).some(w => /(^|[\s;&|("'])(cd|pushd|popd)\b/.test(w.raw))) {
       cur = uniq([...cur, { unresolved: unquoted(words.slice(lead).map(w => w.raw).join(' ')), kind: 'cd' }])
     }
+    // set -P, set -o physical (and +P, +o physical) change what a cd does after
+    if (lead >= 0 && literal(words[lead]) === 'set') {
+      const on = physicalOption(words.slice(lead + 1))
+      if (on !== undefined) {
+        const now = on === null ? 'both' : on ? 'P' : 'L'
+        mode = words.sure && lead === 0 && now !== 'both' ? now : mode === now ? now : 'both'
+      }
+    }
     if (moved) {
-      const there = capped(uniq(await Promise.all(cur.flatMap(dir => moved.to.map(to => logical($, join(dir, to), moved.physical))))), words[lead + 1]?.raw)
+      const there = []
+      const how = moved.mode ?? mode
+      for (const dir of cur) {
+        for (const to of moved.to) {
+          if (typeof dir !== 'string' || typeof to !== 'string') {
+            there.push(join(dir, to))
+            continue
+          }
+          for (const isResolved of [physical.has(dir), ...(plain.has(dir) && physical.has(dir) ? [false] : [])]) {
+            // cd -P: the disk resolves the whole path, as git -C does
+            if (how !== 'L') {
+              const p = join(dir, to)
+              physical.add(p)
+              there.push(p)
+            }
+            if (how === 'P') continue
+            // cd -L on a resolved directory: the target's own . and .. go by
+            // its text, and a .. past it is the resolved directory's parent,
+            // which git finds by resolving dir/.. too
+            if (isResolved && !isAbsolute(to)) {
+              const p = join(dir, lexical(to))
+              physical.add(p)
+              there.push(p)
+            } else {
+              const p = await logical($, join(dir, to))
+              if (typeof p === 'string') plain.add(p)
+              there.push(p)
+            }
+          }
+        }
+      }
+      there.splice(0, there.length, ...capped(uniq(there), words[lead + 1]?.raw))
       // Only `cd X && ...`, run in this shell with nothing before it that
       // could skip it, surely moves what follows in the chain. Any other cd
       // may or may not have run: check both directories.
@@ -690,14 +737,14 @@ const LEADS = /^(if|then|elif|else|do|while|until|!|\{|time|builtin|command)$/
 const CD = /^(cd|pushd|popd)$/
 const isAssignment = w => !w.parts[0]?.q && /^[A-Za-z_]\w*=/.test(w.parts[0]?.lit ?? '')
 
-// Where a cd, pushd or popd (words[0]) moves: { to, physical }, `to` each
+// Where a cd, pushd or popd (words[0]) moves: { to, mode }, `to` each
 // directory it may go to, relative or absolute ({ unresolved } when that can't
-// be known), `physical` for cd -P; null when it doesn't move
+// be known), `mode` 'P' for -P, 'L' for -L, else undefined; null when it doesn't move
 async function cdTargets($, words, vars, at) {
   const name = literal(words[0])
   let k = 1
   let stays = false
-  let physical = false
+  let mode
   for (; k < words.length; k++) {
     const t = literal(words[k])
     if (t === '--') {
@@ -708,11 +755,11 @@ async function cdTargets($, words, vars, at) {
     // pushd -n and popd -n change only the stack
     if (name !== 'cd' && t.includes('n')) stays = true
     // the last of -L and -P wins
-    if (/[LP]/.test(t)) physical = t.replace(/[^LP]/g, '').endsWith('P')
+    if (/[LP]/.test(t)) mode = t.replace(/[^LP]/g, '').endsWith('P') ? 'P' : 'L'
   }
   if (stays) return null
   const to = await cdPlaces($, name, words[k], vars, at)
-  return { to, physical }
+  return { to, mode }
 }
 
 async function cdPlaces($, name, target, vars, at) {
@@ -750,9 +797,9 @@ function usesCdpath(text) {
 // Where a cd ends, as the next git sees it. bash's cd -L takes . and .. off
 // the text (/a/link/.. is /a), while git -C would resolve the link first, so
 // a cd's path is made plain by its text. A relative one with a .. starts
-// from the session directory. cd -P keeps the path for the disk to resolve.
-async function logical($, path, physical) {
-  if (physical || typeof path !== 'string' || path === '') return path
+// from the session directory. (cd -P keeps the path for the disk to resolve.)
+async function logical($, path) {
+  if (typeof path !== 'string' || path === '') return path
   if (!isAbsolute(path) && path.split(/[\\/]/).includes('..')) {
     let cwd = ''
     try { cwd = await $.session.cwd() } catch {}
@@ -760,6 +807,21 @@ async function logical($, path, physical) {
     path = join(cwd, path)
   }
   return lexical(path)
+}
+
+// Whether set's words turn physical on (true), off (false), may do either
+// (null: a word the command can't tell) or don't touch it (undefined)
+function physicalOption(args) {
+  let on
+  for (const [n, w] of args.entries()) {
+    const t = literal(w)
+    if (t === '--') break
+    if (t === null) return null
+    if (/^-[A-Za-z]*P/.test(t)) on = true
+    else if (/^\+[A-Za-z]*P/.test(t)) on = false
+    else if (/^[-+][A-Za-z]*o$/.test(t) && literal(args[n + 1] ?? { parts: [] }) === 'physical') on = t[0] === '-'
+  }
+  return on
 }
 
 // A path with its . and .. taken off by its text: /a/b/../c is /a/c

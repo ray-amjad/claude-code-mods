@@ -659,3 +659,42 @@ test('lexical takes . and .. off a path by its text', async () => {
   expect(lexical('C:/..')).toBe('C:/')
   expect(lexical('\\\\server\\share\\a\\..\\b')).toBe('//server/share/b')
 })
+
+// PR #36 review 2: after cd -P (or set -P) bash's directory is the resolved
+// one, so a later .. is that directory's parent, which git finds by
+// resolving the link too: /clean/link -> /dirty/subdir, then .. is /dirty
+const PHYSICAL: [string, string, string[]][] = [
+  ['cd -P, then cd ..', 'cd -P /clean/link && cd .. && git commit -m msg', ['/clean/link/..']],
+  ['cd -P, then a relative cd with its own ..', 'cd -P /clean/link && cd sub/link2/.. && git commit -m msg', ['/clean/link/sub']],
+  ['cd -P, then ../x', 'cd -P /clean/link && cd ../x && git commit -m msg', ['/clean/link/../x']],
+  ['cd -P, then an absolute -L cd', 'cd -P /clean/link && cd /a/b/.. && git commit -m msg', ['/a']],
+  ['pushd -P, then cd ..', 'pushd -P /clean/link && cd .. && git commit -m msg', ['/clean/link/..']],
+  ['set -P', 'set -P; cd /clean/link && cd .. && git commit -m msg', ['/clean/link/..']],
+  ['set -o physical', 'set -o physical && cd /clean/link/.. && git commit -m msg', ['/clean/link/..']],
+  ['set -eP', 'set -eP\ncd /clean/link/.. && git commit -m msg', ['/clean/link/..']],
+  ['set -P with pushd', 'set -P; pushd /clean/link/.. && git commit -m msg', ['/clean/link/..']],
+  ['cd -L after set -P', 'set -P; cd -L /clean/link/.. && git commit -m msg', ['/clean']],
+  ['set +P after set -P', 'set -P; set +P; cd /clean/link/.. && git commit -m msg', ['/clean']],
+  ['set +o physical after set -P', 'set -P; set +o physical; cd /clean/link/.. && git commit -m msg', ['/clean']],
+  ['set -e alone', 'set -e; cd /clean/link/.. && git commit -m msg', ['/clean']],
+  // may or may not have run: both readings are checked
+  ['set -P in an if', 'if x; then set -P; fi; cd /clean/link/.. && git commit -m msg', ['/clean', '/clean/link/..']],
+  ['set -P after &&', 'true && set -P; cd /clean/link/.. && git commit -m msg', ['/clean', '/clean/link/..']],
+  ['set -P in bash -c code', `bash -c 'set -P; git commit -m x'; cd /clean/link/.. && git commit -m msg`, ['', '/clean', '/clean/link/..']],
+  ['set with a variable', 'set $OPTS; cd /clean/link/.. && git commit -m msg', ['/clean', '/clean/link/..']],
+  ['set -- $args does not touch it', 'set -- $ARGS; cd /clean/link/.. && git commit -m msg', ['/clean']],
+  ['an uncertain cd -P', 'cd -P /clean/link; cd .. && git commit -m msg', ['/', '/clean/link/..']],
+]
+for (const [name, command, asked] of PHYSICAL) {
+  test(`a resolved directory is resolved by git too: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, cwd: '/scratch' })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+    expect(dirsAsked(argvs)).toEqual([...asked].sort())
+  })
+}
+
+test('cd -P /clean/link && cd .. && git commit is blocked with a .env staged where it lands', async ($, on) => {
+  gitStub(on, { outside: true, dirty: '/clean/link/..' })
+  expect((await call($, { tool: 'Bash', command: 'cd -P /clean/link && cd .. && git commit -m msg' })).deny).toContain('would include a .env file')
+})
