@@ -281,6 +281,10 @@ function shellCommands(src) {
     let ctl = 0
     // After && || or |, a newline continues the list rather than ending it
     let cont = false
+    // The command before follows a single |: it runs in a subshell
+    let afterPipe = false
+    // The operator that ended the last command at this level
+    let lastOp
     const heredocs = []
     const begin = () => {
       cont = false
@@ -296,10 +300,20 @@ function shellCommands(src) {
       if (word) words.push({ ...word, raw: src.slice(word.start, i) })
       word = null
     }
-    const endCmd = (alone = true) => {
+    // op: what ends the command (&& || ; | & a newline or ), none at the end)
+    const endCmd = (alone = true, op) => {
       endWord()
       if (words.length) {
         words.sure = alone && sureNext && ctl === 0 && depth === 0 && !inSub
+        // For a cd: it runs in this shell, at the top of the command, not
+        // inside a body, a subshell or a pipe. `atLevel`: at the command's own
+        // level, where an operator ends a list. `prev`/`op`: around it.
+        words.atLevel = depth === 0 && !inSub
+        words.top = alone && !afterPipe && ctl === 0 && words.atLevel
+        words.prev = lastOp
+        words.op = op
+        lastOp = op
+        afterPipe = false
         // if, while ... and { open a body, fi, done, esac and } close one:
         // as the leading words, and { after `function name`
         for (const w of words) {
@@ -381,7 +395,7 @@ function shellCommands(src) {
     while (i < src.length) {
       const ch = src[i]
       if (ch === '\n') {
-        endCmd()
+        endCmd(true, '\n')
         if (!cont) sureNext = true
         i++
         readHeredocs()
@@ -391,7 +405,7 @@ function shellCommands(src) {
       } else if (ch === '#' && !word) {
         while (i < src.length && src[i] !== '\n') i++
       } else if (ch === ')' && inSub && depth === 0) {
-        endCmd()
+        endCmd(true, ')')
         return
       } else if (ch === '&' && src[i + 1] === '>') {
         // &> file: a redirection, not a background job
@@ -402,7 +416,8 @@ function shellCommands(src) {
         if (ch === ')') depth--
         // a single | or & puts the command before it in a subshell
         const isSub = (ch === '|' || ch === '&') && src[i + 1] !== ch && src[i - 1] !== ch
-        endCmd(!isSub)
+        endCmd(!isSub, src[i + 1] === ch && (ch === '&' || ch === '|') ? ch + ch : ch)
+        if (isSub && ch === '|') afterPipe = true
         sureNext = ch === ';'
         cont = ch === '&' || ch === '|'
         i++
@@ -493,7 +508,10 @@ function unquoted(raw) {
 
 // Commands read out of a quoted string, a heredoc or backticks may never run
 function unsure(cmds) {
-  for (const c of cmds) c.sure = false
+  for (const c of cmds) {
+    c.sure = c.top = false
+    c.inner = true
+  }
   return cmds
 }
 
@@ -592,44 +610,134 @@ function assignments(cmds) {
   return vars
 }
 
-// The repositories a command's git calls run in: each `git -C <dir>`, and the
-// session's own repository ('') for a plain `git`. A directory that can't be
-// worked out comes back as { unresolved: the text as written }.
+// The repositories a command's git calls run in: each `git -C <dir>`, on top
+// of the directory a `cd` or `pushd` before it moved to, and the session's own
+// directory ('') for a plain `git`. A directory that can't be worked out comes
+// back as { unresolved: the text as written, kind: '-C' or 'cd' }.
 async function gitDirs($, cmd) {
   const dirs = new Map()
   const cmds = shellCommands(cmd)
   const vars = assignments(cmds)
+  // Where the next command runs if every cd so far in this && chain worked,
+  // and where it runs if one of them failed: bash skips the rest of the
+  // chain, and the command after the next ; newline or || runs there
+  let cur = ['']
+  let failed = []
   for (const [index, words] of cmds.entries()) {
-    // git, git.exe or a path to it; then its global options, up to the subcommand
-    const at = words.findIndex(w => /(^|[\\/])git(\.exe)?$/i.test(literal(w) ?? ''))
-    if (at < 0) continue
-    let found = ['']
-    let unresolved = null
-    for (let k = at + 1; k < words.length; k++) {
-      const opt = literal(words[k])
-      let value = null
-      if (opt === '-C') value = words[++k]
-      else if (opt === null && words[k].parts[0].lit?.startsWith('-C') && !words[k].parts[0].q) {
-        value = { parts: [{ ...words[k].parts[0], lit: words[k].parts[0].lit.slice(2) }, ...words[k].parts.slice(1)], raw: words[k].raw.slice(2) }
-      } else if (opt?.startsWith('-C')) value = { parts: [{ lit: opt.slice(2), q: false }], raw: opt.slice(2) }
-      else if (opt === '-c' || /^--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)$/.test(opt ?? '')) k++
-      else if (!/^-/.test(opt ?? words[k].parts[0].lit ?? '')) break
-      if (!value) continue
-      const texts = await expand($, value, vars, index)
-      if (!texts) {
-        unresolved ??= unquoted(value.raw)
-        continue
-      }
-      // git -C a -C b runs in a/b; an absolute -C starts over
-      found = found.flatMap(dir => texts.map(text => (!dir || isAbsolute(text) || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text)))
-      if (found.length > MAX_DIRS) unresolved ??= unquoted(value.raw)
+    const lead = words.findIndex(w => !LEADS.test(literal(w) ?? '') && !isAssignment(w))
+    const moved = lead >= 0 && CD.test(literal(words[lead]) ?? '') ? await cdTargets($, words.slice(lead), vars, index) : undefined
+    if (moved) {
+      const there = capped(cur.flatMap(dir => moved.map(to => join(dir, to))), words[lead + 1]?.raw)
+      // Only `cd X && ...`, run in this shell with nothing before it that
+      // could skip it, surely moves what follows in the chain. Any other cd
+      // may or may not have run: check both directories.
+      if (words.top && lead === 0 && words.op === '&&' && words.prev !== '||') {
+        failed = uniq([...failed, ...cur])
+        cur = there
+      } else cur = capped(uniq([...cur, ...there]), words[lead + 1]?.raw)
     }
-    if (unresolved !== null) dirs.set('?' + unresolved, { unresolved })
-    else for (const dir of found) dirs.set(dir, dir)
+    // git, git.exe or a path to it; then its global options, up to the subcommand
+    const at = moved !== undefined ? -1 : words.findIndex(w => /(^|[\\/])git(\.exe)?$/i.test(literal(w) ?? ''))
+    if (at >= 0) {
+      let found = cur
+      let unresolved = null
+      for (let k = at + 1; k < words.length; k++) {
+        const opt = literal(words[k])
+        let value = null
+        if (opt === '-C') value = words[++k]
+        else if (opt === null && words[k].parts[0].lit?.startsWith('-C') && !words[k].parts[0].q) {
+          value = { parts: [{ ...words[k].parts[0], lit: words[k].parts[0].lit.slice(2) }, ...words[k].parts.slice(1)], raw: words[k].raw.slice(2) }
+        } else if (opt?.startsWith('-C')) value = { parts: [{ lit: opt.slice(2), q: false }], raw: opt.slice(2) }
+        else if (opt === '-c' || /^--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)$/.test(opt ?? '')) k++
+        else if (!/^-/.test(opt ?? words[k].parts[0].lit ?? '')) break
+        if (!value) continue
+        const texts = await expand($, value, vars, index)
+        if (!texts) {
+          unresolved ??= unquoted(value.raw)
+          continue
+        }
+        // git -C a -C b runs in a/b; an absolute -C starts over
+        found = found.flatMap(dir => texts.map(text => join(dir, text)))
+        if (found.length > MAX_DIRS) unresolved ??= unquoted(value.raw)
+      }
+      if (unresolved !== null) dirs.set('?' + unresolved, { unresolved, kind: '-C' })
+      else for (const dir of found) dirs.set(key(dir), dir)
+    }
+    // The end of a list at the command's own level: a failed cd's skip stops here
+    if (!words.inner && words.atLevel && words.op !== '&&') {
+      cur = uniq([...cur, ...failed])
+      failed = []
+    }
   }
   // gitRuns saw a commit, but no git call came out here: check the session's repository
   if (dirs.size === 0) dirs.set('', '')
-  return [...dirs.values()]
+  // git.exe is run directly, not through Git Bash, so it can't read /e/repo
+  const windows = await isWindows($)
+  return uniq([...dirs.values()].map(dir => (windows && typeof dir === 'string' ? fromMsys(dir) : dir)))
+}
+
+// Words before a command that leave it the command: if, then, do ..., and
+// builtin or command before cd
+const LEADS = /^(if|then|elif|else|do|while|until|!|\{|time|builtin|command)$/
+const CD = /^(cd|pushd|popd)$/
+const isAssignment = w => !w.parts[0]?.q && /^[A-Za-z_]\w*=/.test(w.parts[0]?.lit ?? '')
+
+// The directories a cd, pushd or popd (words[0]) moves to, each relative or
+// absolute; [{ unresolved }] when that can't be known, null when it doesn't move
+async function cdTargets($, words, vars, at) {
+  const name = literal(words[0])
+  let k = 1
+  let stays = false
+  for (; k < words.length; k++) {
+    const t = literal(words[k])
+    if (t === '--') {
+      k++
+      break
+    }
+    if (!t || !/^-[LPe@n]+$/.test(t)) break
+    // pushd -n and popd -n change only the stack
+    if (name !== 'cd' && t.includes('n')) stays = true
+  }
+  if (stays) return null
+  const target = words[k]
+  const cannot = raw => [{ unresolved: raw, kind: 'cd' }]
+  const written = `${name}${target ? ' ' + unquoted(target.raw) : ''}`
+  // popd and a bare pushd go back to a directory from the stack, which may
+  // have been set by an earlier call; cd - goes to $OLDPWD, the same
+  if (name === 'popd' || !target && name === 'pushd') return cannot(written)
+  if (!target) {
+    // A bare cd goes home
+    const home = await values($, vars, 'HOME', at, new Set())
+    return home ?? cannot('cd (HOME is not known)')
+  }
+  const t = literal(target)
+  if (t === '-' || name === 'pushd' && /^[+-]\d+$/.test(t ?? '')) return cannot(written)
+  // ~user is another person's home
+  if (!target.parts[0].q && /^~[^\/\\]/.test(target.parts[0].lit ?? '')) return cannot(written)
+  return (await expand($, target, vars, at)) ?? cannot(written)
+}
+
+// dir, then text on top of it: an absolute text starts over, '' stays
+function join(dir, text) {
+  if (isAbsolute(text)) return text
+  if (typeof dir !== 'string') return dir
+  return !dir || text === '' ? text || dir : dir.replace(/[\\/]$/, '') + '/' + text
+}
+const key = dir => (typeof dir === 'string' ? dir : `?${dir.kind}?${dir.unresolved}`)
+const uniq = list => [...new Map(list.map(d => [key(d), d])).values()]
+const capped = (list, raw) => (list.length > MAX_DIRS ? [{ unresolved: unquoted(raw), kind: 'cd' }] : list)
+
+// The same check the box's wait uses: every Windows sets OS=Windows_NT, in
+// Git Bash too, while the session directory's shape can't tell a Git Bash
+// /e/repo from a Linux one
+async function isWindows($) {
+  try { return (await $.env.get('OS')) === 'Windows_NT' } catch { return false }
+}
+
+// /e/repo and /cygdrive/e/repo (Git Bash, Cygwin) as E:/repo; anything else as it is
+export function fromMsys(path) {
+  const m = String(path).match(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)(.*)$/)
+  return m ? m[1].toUpperCase() + ':' + (m[2] || '/') : path
 }
 
 // Whether the command runs `git` as a command, then one of `subs`: not the
@@ -687,14 +795,18 @@ async function commitBlockReason($, cmd) {
   // doesn't read like a found secret, or like a clean check
   const unsure = 'This is not a detected .env: the guard could not check this commit, so it blocks it. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
   for (const dir of await gitDirs($, cmd)) {
-    if (typeof dir !== 'string') return `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
+    if (typeof dir !== 'string') {
+      return dir.kind === 'cd'
+        ? `couldn't resolve the directory \`${dir.unresolved}\` moves to before git runs (cd -, popd, a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
+        : `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
+    }
     const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])
     const checks = [git('diff', '--cached', '--name-only')]
     if (stages) checks.push(git('ls-files', '--modified', '--others', '--exclude-standard'))
     for (const r of await Promise.all(checks)) {
       if (r.exitCode !== 0) {
         const said = String(r.stderr || '').trim().split('\n')[0]
-        return `couldn't read git state in ${dir || 'the session directory'}${said ? ` (git: ${said})` : ''}. ${unsure}`
+        return `couldn't read git state in ${await where($, dir)}${said ? ` (git: ${said})` : ''}. ${unsure}`
       }
       const env = r.stdout.split('\n').find(isEnvFile)
       if (env) {
@@ -705,6 +817,15 @@ async function commitBlockReason($, cmd) {
     }
   }
   return ''
+}
+
+// The directory git ran in, for a message: the session's own is named, since
+// a plain git (and a relative -C or cd) runs from there
+async function where($, dir) {
+  let cwd = ''
+  try { cwd = await $.session.cwd() } catch {}
+  if (!dir) return cwd ? `${cwd} (the session directory)` : 'the session directory'
+  return isAbsolute(dir) || !cwd ? dir : `${dir} (under ${cwd})`
 }
 
 // The field shows dots; the real text is kept in `p.value`, never drawn.
