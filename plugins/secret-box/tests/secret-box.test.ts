@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromMsys, isAbsolute, isEnvFile, isNotFound, WAITS } from '../hooks/register'
+import { fromMsys, isAbsolute, isEnvFile, isNotFound, lexical, WAITS } from '../hooks/register'
 
 // Fake keys, built at run time so no key-shaped string sits in the repo
 const STRIPE = 'sk_' + 'live_' + 'A1b2C3d4E5f6G7h8J9k0L1m2'
@@ -167,10 +167,13 @@ test('a .env file that cannot be checked still runs, and is scanned', async ($, 
 // `repos`, when given, are the only -C directories git can read, and `dirty`
 // is the one whose index holds a .env ('' the session's), `untracked` the one
 // with an untracked .env; `env` is the environment, `cwd` the session's
-// directory, and `outside` puts it outside any repository.
-function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; outside?: boolean }) {
+// directory (`cwdFails`: it can't be read), and `outside` puts it outside any repository.
+function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean }) {
   on('tool.call', () => ({ result: 'ran' }))
-  on('session.cwd', () => ({ value: opts.cwd ?? '/repo' }))
+  on('session.cwd', () => {
+    if (opts.cwdFails) throw new Error('no cwd')
+    return { value: opts.cwd ?? '/repo' }
+  })
   on('fs.exists', () => ({ value: false }))
   on('env.get', (_$: unknown, e: { name: string }) => ({ value: opts.env?.[e.name] }))
   on('process.run', (_$: unknown, e: { argv: string[] }) => {
@@ -567,4 +570,92 @@ test('a converted Windows directory is named as given to git', async ($, on) => 
   gitStub(on, { repos: [DIR], cwd: 'C:\\scratch', env: { OS: 'Windows_NT' } })
   const r = await call($, { tool: 'Bash', command: 'cd /e/gone && git commit -m msg' })
   expect(r.deny).toContain("couldn't read git state in E:/gone")
+})
+
+// PR #36 review: bash looks a relative cd up in CDPATH first, so every
+// CDPATH folder is checked as well as the plain target
+const CDPATH_DIRS: [string, string, Record<string, string>, string[]][] = [
+  ['CDPATH set in the command', 'CDPATH=/dirty-parent; cd repo && git commit -m msg', {}, ['/dirty-parent/repo', 'repo']],
+  ['CDPATH exported in the command', 'export CDPATH=/a:/b && cd repo && git commit -m msg', {}, ['/a/repo', '/b/repo', 'repo']],
+  ['CDPATH for the cd alone', 'CDPATH=/dirty-parent cd repo && git commit -m msg', {}, ['/dirty-parent/repo', 'repo']],
+  ['CDPATH from the environment', 'cd repo && git commit -m msg', { CDPATH: '/dirty-parent:' }, ['/dirty-parent/repo', 'repo']],
+  ['pushd uses CDPATH too', 'pushd repo && git commit -m msg', { CDPATH: '/dirty-parent' }, ['/dirty-parent/repo', 'repo']],
+  ['CDPATH and a .hidden target', 'cd .repo && git commit -m msg', { CDPATH: '/p' }, ['.repo', '/p/.repo']],
+  ['no CDPATH for ./repo', 'cd ./repo && git commit -m msg', { CDPATH: '/p' }, ['repo']],
+  ['no CDPATH for ../repo', 'cd ../repo && git commit -m msg', { CDPATH: '/p' }, ['/repo']],
+  ['no CDPATH for an absolute target', `cd ${DIR} && git commit -m msg`, { CDPATH: '/p' }, [DIR]],
+  ['no CDPATH set', 'cd repo && git commit -m msg', {}, ['repo']],
+]
+for (const [name, command, env, asked] of CDPATH_DIRS) {
+  test(`a relative cd checks each CDPATH folder: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, cwd: '/scratch', outside: true, env })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+    expect(dirsAsked(argvs)).toEqual(asked.sort())
+  })
+}
+
+test('a .env staged in the CDPATH folder is blocked', async ($, on) => {
+  gitStub(on, { cwd: '/scratch', outside: true, dirty: '/dirty-parent/repo' })
+  expect((await call($, { tool: 'Bash', command: 'CDPATH=/dirty-parent; cd repo && git commit -m msg' })).deny).toContain('would include a .env file')
+})
+
+test('a CDPATH that cannot be known blocks a relative cd, and says so', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs })
+  const r = await call($, { tool: 'Bash', command: 'CDPATH=$(cat paths); cd repo && git commit -m msg' })
+  expect(r.deny).toContain("couldn't resolve the directory `cd repo (CDPATH is not known)` moves to before git runs")
+  expect(argvs.length).toBe(0)
+})
+
+test('a CDPATH that cannot be known leaves an absolute cd alone', async ($, on) => {
+  gitStub(on, { repos: [DIR], outside: true })
+  expect((await call($, { tool: 'Bash', command: `CDPATH=$(cat paths); cd ${DIR} && git commit -m msg` })).deny).toBeUndefined()
+})
+
+// PR #36 review: cd -L (bash's default) takes .. off the text, git -C would
+// follow a link first: /dirty/link/.. is /dirty to bash, whatever link is
+const LOGICAL: [string, string, string[]][] = [
+  ['an absolute path with ..', 'cd /dirty/link/.. && git commit -m msg', ['/dirty']],
+  ['cd -L', 'cd -L /dirty/link/.. && git commit -m msg', ['/dirty']],
+  ['a .. after a cd', 'cd /dirty/link && cd .. && git commit -m msg', ['/dirty']],
+  ['. parts', 'cd /dirty/./link/. && git commit -m msg', ['/dirty/link']],
+  ['a relative .. from the session directory', 'cd link/.. && git commit -m msg', ['/scratch']],
+  ['a relative .. above the session directory', 'cd ../other && git commit -m msg', ['/other']],
+  ['.. past the root', 'cd /../.. && git commit -m msg', ['/']],
+  ['cd -P keeps the path as it is', 'cd -P /dirty/link/.. && git commit -m msg', ['/dirty/link/..']],
+  ['-L then -P is physical', 'cd -L -P /dirty/link/.. && git commit -m msg', ['/dirty/link/..']],
+  ['a git -C .. stays git\'s own', 'cd /dirty/link && git -C .. commit -m msg', ['/dirty/link/..']],
+]
+for (const [name, command, asked] of LOGICAL) {
+  test(`a cd path is made plain the way bash -L does: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, cwd: '/scratch', outside: true })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+    expect(dirsAsked(argvs)).toEqual(asked)
+  })
+}
+
+test('a .env staged where cd /dirty/link/.. lands is blocked', async ($, on) => {
+  gitStub(on, { outside: true, repos: ['/dirty', '/safe'], dirty: '/dirty' })
+  expect((await call($, { tool: 'Bash', command: 'cd /dirty/link/.. && git commit -m msg' })).deny).toContain('would include a .env file')
+})
+
+test('a relative cd with .. is unresolved when the session directory is not known', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, cwdFails: true })
+  const r = await call($, { tool: 'Bash', command: 'cd ../repo && git commit -m msg' })
+  expect(r.deny).toContain("couldn't resolve the directory `../repo` moves to before git runs")
+  expect(argvs.length).toBe(0)
+})
+
+test('lexical takes . and .. off a path by its text', async () => {
+  expect(lexical('/a/link/..')).toBe('/a')
+  expect(lexical('/a/./b//c/')).toBe('/a/b/c')
+  expect(lexical('/..')).toBe('/')
+  expect(lexical('a/../..')).toBe('..')
+  expect(lexical('a/..')).toBe('.')
+  expect(lexical('C:\\repo\\sub\\..')).toBe('C:/repo')
+  expect(lexical('C:/..')).toBe('C:/')
+  expect(lexical('\\\\server\\share\\a\\..\\b')).toBe('//server/share/b')
 })

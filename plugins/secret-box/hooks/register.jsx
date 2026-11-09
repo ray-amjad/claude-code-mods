@@ -560,10 +560,13 @@ async function values($, vars, name, at, seen) {
     }
     if (own.sureAt < at) return [...new Set(out)]
   }
-  if (name !== 'HOME') return null
+  if (name !== 'HOME' && name !== 'CDPATH') return null
   try {
-    const home = await $.env.get('HOME')
-    return home == null ? null : [...new Set([...out, home])]
+    // Each name literal: the engine lists the variables a module reads
+    const value = name === 'HOME' ? await $.env.get('HOME') : await $.env.get('CDPATH')
+    // An unset CDPATH is no CDPATH; an unset HOME is not known
+    if (value == null) return name === 'CDPATH' ? [...new Set([...out, ''])] : null
+    return [...new Set([...out, value])]
   } catch { return null }
 }
 
@@ -631,11 +634,12 @@ async function gitDirs($, cmd) {
       cur = uniq([...cur, { unresolved: unquoted(words.slice(lead).map(w => w.raw).join(' ')), kind: 'cd' }])
     }
     if (moved) {
-      const there = capped(cur.flatMap(dir => moved.map(to => join(dir, to))), words[lead + 1]?.raw)
+      const there = capped(uniq(await Promise.all(cur.flatMap(dir => moved.to.map(to => logical($, join(dir, to), moved.physical))))), words[lead + 1]?.raw)
       // Only `cd X && ...`, run in this shell with nothing before it that
       // could skip it, surely moves what follows in the chain. Any other cd
       // may or may not have run: check both directories.
-      if (words.top && lead === 0 && words.op === '&&' && words.prev !== '||') {
+      // VAR=x before the cd sets VAR for it alone, and can't keep it from running
+      if (words.top && words.slice(0, lead).every(isAssignment) && words.op === '&&' && words.prev !== '||') {
         failed = uniq([...failed, ...cur])
         cur = there
       } else cur = capped(uniq([...cur, ...there]), words[lead + 1]?.raw)
@@ -686,12 +690,14 @@ const LEADS = /^(if|then|elif|else|do|while|until|!|\{|time|builtin|command)$/
 const CD = /^(cd|pushd|popd)$/
 const isAssignment = w => !w.parts[0]?.q && /^[A-Za-z_]\w*=/.test(w.parts[0]?.lit ?? '')
 
-// The directories a cd, pushd or popd (words[0]) moves to, each relative or
-// absolute; [{ unresolved }] when that can't be known, null when it doesn't move
+// Where a cd, pushd or popd (words[0]) moves: { to, physical }, `to` each
+// directory it may go to, relative or absolute ({ unresolved } when that can't
+// be known), `physical` for cd -P; null when it doesn't move
 async function cdTargets($, words, vars, at) {
   const name = literal(words[0])
   let k = 1
   let stays = false
+  let physical = false
   for (; k < words.length; k++) {
     const t = literal(words[k])
     if (t === '--') {
@@ -701,9 +707,15 @@ async function cdTargets($, words, vars, at) {
     if (!t || !/^-[LPe@n]+$/.test(t)) break
     // pushd -n and popd -n change only the stack
     if (name !== 'cd' && t.includes('n')) stays = true
+    // the last of -L and -P wins
+    if (/[LP]/.test(t)) physical = t.replace(/[^LP]/g, '').endsWith('P')
   }
   if (stays) return null
-  const target = words[k]
+  const to = await cdPlaces($, name, words[k], vars, at)
+  return { to, physical }
+}
+
+async function cdPlaces($, name, target, vars, at) {
   const cannot = raw => [{ unresolved: raw, kind: 'cd' }]
   const written = `${name}${target ? ' ' + unquoted(target.raw) : ''}`
   // popd and a bare pushd go back to a directory from the stack, which may
@@ -718,7 +730,50 @@ async function cdTargets($, words, vars, at) {
   if (t === '-' || name === 'pushd' && /^[+-]\d+$/.test(t ?? '')) return cannot(written)
   // ~user is another person's home
   if (!target.parts[0].q && /^~[^\/\\]/.test(target.parts[0].lit ?? '')) return cannot(written)
-  return (await expand($, target, vars, at)) ?? cannot(written)
+  const texts = await expand($, target, vars, at)
+  if (!texts) return cannot(written)
+  // A relative target is looked up in each CDPATH folder first. Check them
+  // all, and the plain target: which one bash took depends on the disk.
+  if (!texts.some(usesCdpath)) return texts
+  const cdpath = await values($, vars, 'CDPATH', at, new Set())
+  if (!cdpath) return cannot(`${written} (CDPATH is not known)`)
+  const roots = [...new Set(cdpath.flatMap(v => v.split(':')).filter(Boolean))]
+  const out = texts.flatMap(t => (usesCdpath(t) ? [t, ...roots.map(r => join(r, t))] : [t]))
+  return out.length > MAX_DIRS ? cannot(written) : [...new Set(out)]
+}
+
+// bash skips CDPATH for /x, ., .., ./x and ../x
+function usesCdpath(text) {
+  return text !== '' && !isAbsolute(text) && !/^\.\.?([\\/]|$)/.test(text)
+}
+
+// Where a cd ends, as the next git sees it. bash's cd -L takes . and .. off
+// the text (/a/link/.. is /a), while git -C would resolve the link first, so
+// a cd's path is made plain by its text. A relative one with a .. starts
+// from the session directory. cd -P keeps the path for the disk to resolve.
+async function logical($, path, physical) {
+  if (physical || typeof path !== 'string' || path === '') return path
+  if (!isAbsolute(path) && path.split(/[\\/]/).includes('..')) {
+    let cwd = ''
+    try { cwd = await $.session.cwd() } catch {}
+    if (!cwd) return { unresolved: path, kind: 'cd' }
+    path = join(cwd, path)
+  }
+  return lexical(path)
+}
+
+// A path with its . and .. taken off by its text: /a/b/../c is /a/c
+export function lexical(path) {
+  const root = path.match(/^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]?|[\\/])/)?.[0] ?? ''
+  const parts = []
+  for (const part of path.slice(root.length).split(/[\\/]+/)) {
+    if (part === '' || part === '.') continue
+    if (part === '..' && parts.length && parts.at(-1) !== '..') parts.pop()
+    else if (part !== '..' || !root) parts.push(part)
+  }
+  const top = root.replace(/\\/g, '/')
+  if (!parts.length) return top || '.'
+  return (top && !top.endsWith('/') ? top + '/' : top) + parts.join('/')
 }
 
 // dir, then text on top of it: an absolute text starts over, '' stays
