@@ -929,14 +929,17 @@ async function commitBlockReason($, cmd) {
     // and ls-files on :/, the top of the tree, with pathspec magic on so :/ is
     // not read as a file name. A git add . from a subfolder is checked against
     // the whole tree too: more than it stages, never less.
-    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only'])]
-    if (stages) checks.push(git(['ls-files', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { GIT_LITERAL_PATHSPECS: '0' } }))
+    // -z: names come NUL-separated and as they are. Without it git quotes a
+    // name with non-ASCII, a quote, a backslash or a newline in it
+    // ("caf\303\251/.env"), and the quoted name doesn't end in .env.
+    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z'])]
+    if (stages) checks.push(git(['ls-files', '-z', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { GIT_LITERAL_PATHSPECS: '0' } }))
     for (const r of await Promise.all(checks)) {
       if (r.exitCode !== 0) {
         const said = String(r.stderr || '').trim().split('\n')[0]
         return `couldn't read git state in ${await where($, dir)}${said ? ` (git: ${said})` : ''}. ${unsure}`
       }
-      const env = r.stdout.split('\n').find(isEnvFile)
+      const env = r.stdout.split('\0').find(isEnvFile)
       if (env) {
         return stages
           ? `this command could stage and commit ${env}. Add it to .gitignore, or stage named files in a separate step.`

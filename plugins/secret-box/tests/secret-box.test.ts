@@ -16,7 +16,8 @@ function stubs(on: any, opts: { output?: string; staged?: string; dotenv?: strin
     opts.seen?.push(String(e.command ?? ''))
     return { result: opts.output ?? 'ran' }
   })
-  on('process.run', () => ({ value: { exitCode: 0, stdout: opts.staged ?? '', stderr: '' } }))
+  // git -z: one name per NUL
+  on('process.run', () => ({ value: { exitCode: 0, stdout: (opts.staged ?? '').replace(/\n/g, '\0'), stderr: '' } }))
   on('session.cwd', () => ({ value: opts.cwd ?? '/repo' }))
   on('fs.exists', (_$: unknown, e: { path: string }) => {
     opts.looked?.push(e.path)
@@ -168,7 +169,8 @@ test('a .env file that cannot be checked still runs, and is scanned', async ($, 
 // is the one whose index holds a .env ('' the session's), `untracked` the one
 // with an untracked .env; `env` is the environment, `cwd` the session's
 // directory (`cwdFails`: it can't be read), and `outside` puts it outside any repository.
-function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean; envs?: (Record<string, string> | undefined)[] }) {
+// `raw`: the lists go out exactly as written, for names that hold a newline.
+function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean; envs?: (Record<string, string> | undefined)[]; raw?: boolean }) {
   on('tool.call', () => ({ result: 'ran' }))
   on('session.cwd', () => {
     if (opts.cwdFails) throw new Error('no cwd')
@@ -186,9 +188,11 @@ function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean
     if (!dir && opts.outside) {
       return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' } }
     }
-    const stdout = e.argv.includes('ls-files')
+    // The lists are written one name per line; git -z gives one per NUL
+    const list = e.argv.includes('ls-files')
       ? (opts.untracked !== undefined && dir === opts.untracked ? '.env\n' : opts.tree ?? '')
       : opts.dirty !== undefined && dir === opts.dirty ? '.env\n' : opts.index ?? ''
+    const stdout = opts.raw ? list : list.replace(/\n/g, '\0')
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
 }
@@ -211,7 +215,7 @@ test('git -C checks the repository it names', async ($, on) => {
   gitStub(on, { index: '.env\n', argvs })
   const r = await call($, { tool: 'Bash', command: 'git -C ../other commit -m wip' })
   expect(Boolean(r.deny)).toBe(true)
-  expect(argvs.some((a) => a.join(' ') === 'git -C ../other -c diff.relative=false diff --cached --name-only')).toBe(true)
+  expect(argvs.some((a) => a.join(' ') === 'git -C ../other -c diff.relative=false diff --cached --name-only -z')).toBe(true)
 })
 
 // #31: a -C directory the guard mis-read used to block a clean commit.
@@ -508,7 +512,7 @@ test('cd X && git add -A && git commit is blocked with an untracked .env in X', 
   gitStub(on, { argvs, repos: [DIR], untracked: DIR, outside: true })
   const r = await call($, { tool: 'Bash', command: `cd ${DIR} && git add -A && git commit -m msg` })
   expect(r.deny).toContain('could stage and commit .env')
-  expect(argvs.some(a => a.join(' ') === `git -C ${DIR} ls-files --full-name --modified --others --exclude-standard -- :/`)).toBe(true)
+  expect(argvs.some(a => a.join(' ') === `git -C ${DIR} ls-files -z --full-name --modified --others --exclude-standard -- :/`)).toBe(true)
 })
 
 test('cd X && git commit is blocked with a .env staged in X', async ($, on) => {
@@ -702,7 +706,7 @@ test('cd -P /clean/link && cd .. && git commit is blocked with a .env staged whe
 
 // Verifier, PR #36: from a subfolder ls-files lists only that folder, while
 // git add -A stages the whole tree. The listing must cover the whole tree.
-const LS = 'ls-files --full-name --modified --others --exclude-standard -- :/'
+const LS = 'ls-files -z --full-name --modified --others --exclude-standard -- :/'
 for (const command of [
   `cd ${DIR}/sub && git add -A && git commit -m x`,
   `cd ${DIR}/sub && git add . && git commit -m x`,
@@ -730,5 +734,35 @@ test('the index is read whole from a subfolder, whatever diff.relative says', as
   gitStub(on, { argvs, index: '.env\n', outside: true })
   const r = await call($, { tool: 'Bash', command: `cd ${DIR}/sub && git commit -m x` })
   expect(r.deny).toContain('would include a .env file')
-  expect(argvs.map(a => a.join(' '))).toEqual([`git -C ${DIR}/sub -c diff.relative=false diff --cached --name-only`])
+  expect(argvs.map(a => a.join(' '))).toEqual([`git -C ${DIR}/sub -c diff.relative=false diff --cached --name-only -z`])
+})
+
+// Codex, PR #36: without -z git quotes an unusual name ("caf\303\251/.env"),
+// which then doesn't end in .env. With -z each name comes as it is.
+const ODD_NAMES = ['café/sub/.env', 'a"b c/.env', 'back\\slash/.env', 'tab\there/.env', 'new\nline/.env', '日本/.env.local']
+for (const name of ODD_NAMES) {
+  test(`a staged .env with an unusual path is found: ${JSON.stringify(name)}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, raw: true, index: `src/a.ts\0${name}\0` })
+    expect((await call($, { tool: 'Bash', command: 'git commit -m x' })).deny).toContain('would include a .env file')
+    expect(argvs[0]).toContain('-z')
+  })
+  test(`an untracked .env with an unusual path is found from a subfolder: ${JSON.stringify(name)}`, async ($, on) => {
+    const argvs: string[][] = []
+    gitStub(on, { argvs, raw: true, tree: `README.md\0${name}\0`, outside: true })
+    const r = await call($, { tool: 'Bash', command: `cd ${DIR}/café/sub && git add -A && git commit -m x` })
+    expect(r.deny).toContain(`could stage and commit ${name}`)
+    expect(argvs.find(a => a.includes('ls-files'))).toContain('-z')
+  })
+}
+
+test('a name with a newline before .env is one name, not a .env', async ($, on) => {
+  // "notes\n.env" is a single odd file, not .env: with -z it is read whole
+  gitStub(on, { raw: true, index: 'notes\n.env\0src/a.ts\0' })
+  expect((await call($, { tool: 'Bash', command: 'git commit -m x' })).deny).toBeUndefined()
+})
+
+test('a clean -z listing with unusual names lets the commit through', async ($, on) => {
+  gitStub(on, { raw: true, index: 'café/a.ts\0a"b c/x.env.example\0', tree: 'café/sub/keep.txt\0', outside: true })
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR}/café/sub && git add -A && git commit -m x` })).deny).toBeUndefined()
 })
