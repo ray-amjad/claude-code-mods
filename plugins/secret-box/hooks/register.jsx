@@ -921,9 +921,16 @@ async function commitBlockReason($, cmd) {
         ? `couldn't resolve the directory \`${dir.unresolved}\` moves to before git runs (cd -, popd, a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
         : `couldn't resolve the git -C directory \`${dir.unresolved}\` (a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
     }
-    const git = (...args) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args])
-    const checks = [git('diff', '--cached', '--name-only')]
-    if (stages) checks.push(git('ls-files', '--modified', '--others', '--exclude-standard'))
+    const git = (args, init) => $.process.run(['git', ...(dir ? ['-C', dir] : []), ...args], init)
+    // From a subfolder (cd sub, git -C repo/sub) both must still see the whole
+    // tree: git commit takes the whole index, and git add -A, -u, :/ and
+    // commit -a stage the whole tree, while ls-files lists only the folder it
+    // runs in. So: diff.relative off, which would hide the rest of the index,
+    // and ls-files on :/, the top of the tree, with pathspec magic on so :/ is
+    // not read as a file name. A git add . from a subfolder is checked against
+    // the whole tree too: more than it stages, never less.
+    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only'])]
+    if (stages) checks.push(git(['ls-files', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { GIT_LITERAL_PATHSPECS: '0' } }))
     for (const r of await Promise.all(checks)) {
       if (r.exitCode !== 0) {
         const said = String(r.stderr || '').trim().split('\n')[0]

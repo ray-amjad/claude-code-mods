@@ -168,7 +168,7 @@ test('a .env file that cannot be checked still runs, and is scanned', async ($, 
 // is the one whose index holds a .env ('' the session's), `untracked` the one
 // with an untracked .env; `env` is the environment, `cwd` the session's
 // directory (`cwdFails`: it can't be read), and `outside` puts it outside any repository.
-function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean }) {
+function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean; envs?: (Record<string, string> | undefined)[] }) {
   on('tool.call', () => ({ result: 'ran' }))
   on('session.cwd', () => {
     if (opts.cwdFails) throw new Error('no cwd')
@@ -176,8 +176,9 @@ function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean
   })
   on('fs.exists', () => ({ value: false }))
   on('env.get', (_$: unknown, e: { name: string }) => ({ value: opts.env?.[e.name] }))
-  on('process.run', (_$: unknown, e: { argv: string[] }) => {
+  on('process.run', (_$: unknown, e: { argv: string[]; init?: { env?: Record<string, string> } }) => {
     opts.argvs?.push([...e.argv])
+    opts.envs?.push(e.init?.env)
     const dir = e.argv[1] === '-C' ? e.argv[2] : ''
     if (opts.fails || (opts.repos && dir && !opts.repos.includes(dir))) {
       return { value: { exitCode: 128, stdout: '', stderr: `fatal: cannot change to '${dir}': No such file or directory` } }
@@ -210,7 +211,7 @@ test('git -C checks the repository it names', async ($, on) => {
   gitStub(on, { index: '.env\n', argvs })
   const r = await call($, { tool: 'Bash', command: 'git -C ../other commit -m wip' })
   expect(Boolean(r.deny)).toBe(true)
-  expect(argvs.some((a) => a.join(' ') === 'git -C ../other diff --cached --name-only')).toBe(true)
+  expect(argvs.some((a) => a.join(' ') === 'git -C ../other -c diff.relative=false diff --cached --name-only')).toBe(true)
 })
 
 // #31: a -C directory the guard mis-read used to block a clean commit.
@@ -507,7 +508,7 @@ test('cd X && git add -A && git commit is blocked with an untracked .env in X', 
   gitStub(on, { argvs, repos: [DIR], untracked: DIR, outside: true })
   const r = await call($, { tool: 'Bash', command: `cd ${DIR} && git add -A && git commit -m msg` })
   expect(r.deny).toContain('could stage and commit .env')
-  expect(argvs.some(a => a.join(' ') === `git -C ${DIR} ls-files --modified --others --exclude-standard`)).toBe(true)
+  expect(argvs.some(a => a.join(' ') === `git -C ${DIR} ls-files --full-name --modified --others --exclude-standard -- :/`)).toBe(true)
 })
 
 test('cd X && git commit is blocked with a .env staged in X', async ($, on) => {
@@ -697,4 +698,37 @@ for (const [name, command, asked] of PHYSICAL) {
 test('cd -P /clean/link && cd .. && git commit is blocked with a .env staged where it lands', async ($, on) => {
   gitStub(on, { outside: true, dirty: '/clean/link/..' })
   expect((await call($, { tool: 'Bash', command: 'cd -P /clean/link && cd .. && git commit -m msg' })).deny).toContain('would include a .env file')
+})
+
+// Verifier, PR #36: from a subfolder ls-files lists only that folder, while
+// git add -A stages the whole tree. The listing must cover the whole tree.
+const LS = 'ls-files --full-name --modified --others --exclude-standard -- :/'
+for (const command of [
+  `cd ${DIR}/sub && git add -A && git commit -m x`,
+  `cd ${DIR}/sub && git add . && git commit -m x`,
+  `cd ${DIR}/sub && git add -u && git commit -m x`,
+  `cd ${DIR}/sub && git add :/ && git commit -m x`,
+  `cd ${DIR}/sub && git commit -am x`,
+  `git -C ${DIR}/sub add -A && git -C ${DIR}/sub commit -m x`,
+]) {
+  test(`a .env outside the subfolder is still found: ${command}`, async ($, on) => {
+    const argvs: string[][] = []
+    const envs: (Record<string, string> | undefined)[] = []
+    // the stub's listing stands for the whole tree, as :/ asks of git
+    gitStub(on, { argvs, envs, tree: 'sub/keep.txt\n.env\n', outside: true })
+    const r = await call($, { tool: 'Bash', command })
+    expect(r.deny).toContain('could stage and commit .env')
+    const at = argvs.findIndex(a => a.includes('ls-files'))
+    expect(argvs[at].join(' ')).toBe(`git -C ${DIR}/sub ${LS}`)
+    // GIT_LITERAL_PATHSPECS=1 would read :/ as a file name and list nothing
+    expect(envs[at]).toEqual({ GIT_LITERAL_PATHSPECS: '0' })
+  })
+}
+
+test('the index is read whole from a subfolder, whatever diff.relative says', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, index: '.env\n', outside: true })
+  const r = await call($, { tool: 'Bash', command: `cd ${DIR}/sub && git commit -m x` })
+  expect(r.deny).toContain('would include a .env file')
+  expect(argvs.map(a => a.join(' '))).toEqual([`git -C ${DIR}/sub -c diff.relative=false diff --cached --name-only`])
 })
