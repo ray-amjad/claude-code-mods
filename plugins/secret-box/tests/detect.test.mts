@@ -365,6 +365,35 @@ const ROUND_TRIP: string[] = [
   keep('pem prose', 'The file starts with a BEGIN line and ends with the END marker.')
 }
 
+let cutExportText = ''
+// 20b. A key body whose BEGIN line was cut away. `<secrets> export | cut -d=
+// -f1` keeps only the name from a multi-line value's first line, so the body
+// and the END line printed bare, and an OpenSSH body is too regular (runs of
+// `A`, `openssh-key-v1`, `ssh-ed25519`) for the entropy tests to catch.
+{
+  const sshHead = Buffer.concat([
+    Buffer.from('openssh-key-v1\0'),
+    Buffer.from([0, 0, 0, 4]), Buffer.from('none'),
+    Buffer.from([0, 0, 0, 4]), Buffer.from('none'),
+    Buffer.from([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0x33, 0, 0, 0, 0x0b]), Buffer.from('ssh-ed25519'),
+  ])
+  const sshBody = Buffer.concat([sshHead, Buffer.from(randomB64(120), 'base64')]).toString('base64')
+  const sshLines = sshBody.match(/.{1,70}/g)!
+  const SSH_END = '-----END OPENSSH PRIVATE ' + 'KEY-----'
+  const cutExport = `DEPLOY_SSH_KEY\n${sshLines.join('\n')}\n${SSH_END}\n'\nLOG_TOKEN\n`
+  hide('cut dotenv, openssh first line', cutExport, sshLines[0]!)
+  hide('cut dotenv, openssh last line', cutExport, sshLines[sshLines.length - 1]!)
+  hide('cut dotenv, openssh middle line', cutExport, sshLines[2]!)
+  const pemLines = pemBody().split('\n')
+  const tailed = `$ tail -4 key.pem\n${pemLines.slice(3).join('\n')}\n${PEM_END('RSA')}\n$ ls`
+  hide('tail of a pem, no BEGIN', tailed, pemLines[3]!)
+  hide('tail of a pem, crlf', tailed.replace(/\n/g, '\r\n'), pemLines[5]!)
+  hide('openssh body, no markers', `${sshLines.join('\n')}\n`, sshLines[0]!)
+  cutExportText = cutExport
+  keep('END marker in prose', 'Copy everything up to the line\n-----END RSA PRIVATE ' + 'KEY-----\ninto the file.')
+  keep('END marker alone', `${PEM_END('RSA')}\n`)
+}
+
 // 21. Credential query parameters.
 {
   const tok = mixed(10) + '%2F' + mixed(10) + '%2B' + mixed(6)
@@ -683,6 +712,13 @@ for (const [label, text] of KEEP) {
   const out = scrub(text)
   if (out !== text) fail(`FALSE POSITIVE  ${label}: ${tagCount(out)} placeholder(s)`)
 }
+{
+  // 20b: only the key goes, the names printed around it stay readable.
+  const out = scrub(cutExportText)
+  if (!out.includes('DEPLOY_SSH_KEY\n[REDACTED-') || !out.includes('LOG_TOKEN')) {
+    fail('LOSS  cut dotenv: the names around the key were swallowed')
+  }
+}
 for (const [label, text] of BLOBS) {
   const n = tagCount(scrub(text))
   if (n > 0) fail(`SHREDDED  ${label}: ${n} placeholder(s)`)
@@ -885,6 +921,8 @@ for (const text of ROUND_TRIP) {
     ['eyJ repeated', () => 'eyJ'.repeat(SIZE / 3), false],
     ['sk- repeated', () => (sk + '-').repeat(SIZE / 3), false],
     ['BEGIN without END', () => (PEM_BEGIN('RSA') + '\n').repeat(SIZE / 32), false],
+    ['END without BEGIN', () => (PEM_END('RSA') + '\n').repeat(SIZE / 30), false],
+    ['base64 lines, one END', () => fill(() => randomB64(48) + '\n') + PEM_END('RSA'), false],
     ['password lines', () => fill(() => `password: ${mixed(10)}\n`), false],
     ['one url parameter', () => 'https://x.io/?token=' + pick(B62 + '%', 400_000).repeat(20), false],
     ['local part, no @ (pii)', () => 'abcdefghij.'.repeat(SIZE / 11), true],

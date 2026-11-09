@@ -504,6 +504,15 @@ const PRIVATE_KEY =
   /-----BEGIN[^\n-]{0,40}PRIVATE KEY(?: BLOCK)?-----(?:(?:(?!-----BEGIN)[\s\S]){0,65536}?-----END[^\n-]{0,40}PRIVATE KEY(?: BLOCK)?-----|(?:\r?\n(?:[A-Za-z][A-Za-z-]{0,40}: [^\n]*|[ \t]*))*(?:\r?\n[A-Za-z0-9+/=]{4}[A-Za-z0-9+/=]*(?=\r?\n|$))+)/g
 const PUTTY_PRIVATE = /(Private-Lines: \d+\r?\n)((?:[A-Za-z0-9+/=]{1,80}(?:\r?\n|$))+)/g
 
+// The END line of a key block whose BEGIN line was cut away: `cut -d= -f1`
+// on a dotenv export keeps only the name from a multi-line value's first line,
+// and `tail key.pem` or `sed -n 2,9p` start below it. The body lines above
+// the END marker are walked back from it (scrubHeadlessKeys), so a text full
+// of base64 is never scanned from every line start.
+const KEY_END = /-----END[^\n-]{0,40}PRIVATE KEY(?: BLOCK)?-----/g
+const KEY_BODY_LINE = /^[ \t]*[A-Za-z0-9+/]{16,}={0,2}[ \t]*\r?$/
+const KEY_LAST_LINE = /^[ \t]*[A-Za-z0-9+/]{2,}={0,2}[ \t]*\r?$/
+
 // A run of dot-separated parts, where a JWT may hide. It has one starting
 // point per run, so a long run is scanned once. A JWT regex of its own went
 // quadratic on base64 JSON, where every row starts with `eyJ`.
@@ -694,7 +703,8 @@ const BLOB = new RegExp(
 )
 const BLOB_NAME =
   /(?:key|token|secret|password|passwd|credential|auth|private|signature|session|cookie|dsn|cert[_-]?key)[\w.-]*["'\]\s]{0,4}[:=]{1,2}\s*["'`]?\s*$/i
-const BLOB_INNER = /PRIVATE KEY|OPENSSH|"private_key"|"client_secret"|"refresh_token"|"password"|"auths"/
+// `openssh-key-v1` is the magic that opens an OpenSSH private key's body.
+const BLOB_INNER = /PRIVATE KEY|OPENSSH|openssh-key-v1|"private_key"|"client_secret"|"refresh_token"|"password"|"auths"/
 
 // A Claude thinking-block signature, and a redacted thinking block: opaque
 // to everyone and useless as a credential. Only the value is parked; the
@@ -1014,8 +1024,40 @@ function parkOpaque(text: string): string {
 function scrubKeyBlocks(text: string, cfg: Config): string {
   let out = text
   if (out.includes('PRIVATE KEY')) out = out.replace(PRIVATE_KEY, (m) => (cfg.allow.has(m) ? m : mint('SECRET', m)))
+  if (out.includes('-----END')) out = scrubHeadlessKeys(out, cfg)
   if (out.includes('Private-Lines:')) out = out.replace(PUTTY_PRIVATE, (_m, head: string, body: string) => head + mint('SECRET', body))
   return out
+}
+
+// A key body with no BEGIN line above it, ended by its END line. Only the
+// lines between the END marker and the first line that is not key-shaped are
+// taken, together with the END marker, as one placeholder. Runs after the
+// PRIVATE_KEY pass, so a whole block has already been swapped and its END
+// line is no longer in the text.
+function scrubHeadlessKeys(text: string, cfg: Config): string {
+  let out = ''
+  let from = 0
+  for (const m of text.matchAll(KEY_END)) {
+    const end = m.index! + m[0].length
+    const lineStart = text.lastIndexOf('\n', m.index! - 1) + 1
+    // Only quotes and spaces may sit before the marker on its own line.
+    if (!/^[ \t'"`]*$/.test(text.slice(lineStart, m.index!))) continue
+    let start = lineStart
+    let lines = 0
+    while (start > from) {
+      const prevStart = text.lastIndexOf('\n', start - 2) + 1
+      const line = text.slice(prevStart, start - 1)
+      if (!(lines === 0 ? KEY_LAST_LINE : KEY_BODY_LINE).test(line)) break
+      start = prevStart
+      lines++
+    }
+    if (lines === 0) continue
+    const block = text.slice(start, end)
+    if (cfg.allow.has(block)) continue
+    out += text.slice(from, start) + mint('SECRET', block)
+    from = end
+  }
+  return from === 0 ? text : out + text.slice(from)
 }
 
 // Walks the dot-separated parts of a run: a part holding `eyJ` and the two
