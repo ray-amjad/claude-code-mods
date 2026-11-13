@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromMsys, isAbsolute, isEnvFile, isNotARepo, isNotFound, lexical, mayFindRepo, WAITS } from '../hooks/register'
+import { fromMsys, isAbsolute, isEnvFile, isNotARepo, isNotFound, lexical, WAITS, withoutData } from '../hooks/register'
 
 // Fake keys, built at run time so no key-shaped string sits in the repo
 const STRIPE = 'sk_' + 'live_' + 'A1b2C3d4E5f6G7h8J9k0L1m2'
@@ -816,9 +816,8 @@ for (const [name, stderr] of [
   })
 }
 
-// Not a repository now is not "can't commit" when the same command can make
-// git find one: it makes or fetches one, points git at one, or moves git in a
-// way the guard does not follow. These still block.
+// A real git commit outside a repository keeps the block, whatever the command
+// does first: it may make, fetch or point git at a repository on the way.
 const FINDS: [string, string][] = [
   ['git init first', 'git init && git add -A && git commit -m init'],
   ['git init in a new folder', 'mkdir app && cd app && git init && git add -A && git commit -m init'],
@@ -879,13 +878,18 @@ test('a worktree added into the session folder blocks the commit there', async (
 test('a session outside a repository still checks where a cd may have gone', async ($, on) => {
   const argvs: string[][] = []
   gitStub(on, { argvs, outside: true, cwd: '/scratch', repos: [DIR], dirty: DIR })
-  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; git commit -m msg` })).deny).toContain('would include a .env file')
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; grep -n 'git commit' notes` })).deny).toContain('would include a .env file')
   expect(dirsAsked(argvs)).toEqual(['', DIR])
 })
 
-test('a session outside a repository and a clean cd target let the commit through', async ($, on) => {
+test('a session outside a repository and a clean cd target let a named commit through', async ($, on) => {
   gitStub(on, { outside: true, cwd: '/scratch', repos: [DIR] })
-  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; git commit -m msg` })).deny).toBeUndefined()
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; grep -n 'git commit' notes` })).deny).toBeUndefined()
+})
+
+test('a real commit that may run in a session folder outside a repository still blocks', async ($, on) => {
+  gitStub(on, { outside: true, cwd: '/scratch', repos: [DIR] })
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; git commit -m msg` })).deny).toContain("couldn't read git state in /scratch")
 })
 
 test('a cd directory that is not there still blocks: the command may make it', async ($, on) => {
@@ -901,10 +905,49 @@ test('isNotARepo takes git\'s not-a-repository failure only', async () => {
   expect(isNotARepo({ exitCode: 128, stderr: "fatal: cannot change to '/x': No such file or directory" })).toBe(false)
 })
 
-test('mayFindRepo leaves the commands from #37 alone', async () => {
-  for (const [, command] of MENTIONS) expect(mayFindRepo(command)).toBe(false)
-  expect(mayFindRepo('git push https://github.com/o/r.git && git commit -m x')).toBe(false)
-  expect(mayFindRepo('git commit -m "initial"')).toBe(false)
-  for (const word of ['ecp -x', 'tarball', 'unzipped', 'newline', 'recreate-it']) expect(mayFindRepo(`echo ${word} && git commit -m x`)).toBe(false)
-  for (const [, command] of FINDS) expect(mayFindRepo(command)).toBe(true)
+// Codex round 2, PR #38: a real git commit keeps the block whatever made the
+// repository before it; a commit named only in data goes through
+for (const command of [
+  'python3 -m zipfile -e repo.zip . && git add -A && git commit -m x',
+  'bsdtar xf repo.tgz; git commit -am x',
+  'grep -q x f || git commit -am x',
+  "python3 -c 'print(1)' && git commit -am x",
+  "python3 -c \"print('$(git commit -am x)')\"",
+  'echo "`git commit -am x`"',
+  "python3 -c \"print('git commit -am x')\" | sh",
+  "cat <<'EOF' | bash\ngit commit -am x\nEOF",
+  'cat <<EOF\n$(git commit -am x)\nEOF',
+  "bash -c 'git commit -am x'",
+  "sh <<'EOF'\ngit commit -am x\nEOF",
+  "eval 'git commit -am x'",
+  "ssh host 'git commit -am x'",
+  "x=$(grep -h 'git commit -am x' notes); $x",
+  "(cat <<'EOF') | sh\ngit commit -am x\nEOF",
+  "{ cat <<'EOF'; } | sh\ngit commit -am x\nEOF",
+  "if true; then echo 'git commit -am x'; fi | sh",
+  "for i in 1; do printf 'git commit -am x'; done | bash",
+]) {
+  test(`outside a repository a commit the shell runs still blocks: ${JSON.stringify(command)}`, async ($, on) => {
+    gitStub(on, { outside: true, cwd: '/scratch' })
+    expect((await call($, { tool: 'Bash', command })).deny).toContain("couldn't read git state in /scratch")
+  })
+}
+for (const command of [
+  "grep -rn 'git commit -m init' docs/",
+  "rg -n 'git commit -am x' && echo 'run git commit -am wip later' >> TODO.md",
+  "cat > NOTES.md <<'EOF'\nthen git init && git add -A && git commit -m first\nEOF",
+  "sed -i 's/TODO/git commit -am wip/' NOTES.md",
+  "node -e \"console.log('git commit -am x')\"",
+]) {
+  test(`outside a repository a commit named only in data goes through: ${JSON.stringify(command)}`, async ($, on) => {
+    gitStub(on, { outside: true, cwd: '/scratch' })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  })
+}
+
+test('withoutData blanks only data given to a data program', async () => {
+  expect(withoutData("grep -E 'git commit' f")).toBe("grep -E '          ' f")
+  expect(withoutData("bash -c 'git commit'")).toBe("bash -c 'git commit'")
+  expect(withoutData('echo "a $(git commit) b"')).toBe('echo "a $(git commit) b"')
+  expect(withoutData("python3 - <<'EOF'\ngit commit\nEOF")).toBe("python3 - <<'EOF'\n          \nEOF")
 })
