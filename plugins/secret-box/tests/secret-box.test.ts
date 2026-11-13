@@ -834,6 +834,25 @@ const FINDS: [string, string][] = [
   ['sudo -D', 'sudo -D /elsewhere git commit -m x'],
   ['a sourced script', 'source ./enter.sh && git commit -m x'],
   ['eval', 'eval "$GO" && git commit -m x'],
+  // Codex, PR #38: a worktree of another repository made in the folder
+  ['git worktree add into the folder', "git -C /repo worktree add --detach /scratch && printf 'API_KEY=x\\n' > .env && git add -A && git commit -m x"],
+  ['git worktree move into the folder', 'git -C /repo worktree move /old /scratch && git commit -am x'],
+  ['git submodule update', 'git -C /repo submodule update --init && git commit -am x'],
+  ['scalar clone', 'scalar clone https://github.com/o/r && git commit -am x'],
+  ['gh repo create --clone', 'gh repo create o/r --public --clone && git commit -am x'],
+  ['jj git init', 'jj git init --colocate && git add -A && git commit -m x'],
+  ['jj workspace add', 'jj workspace add ../w && git commit -am x'],
+  ['cargo init', 'cargo init && git add -A && git commit -m x'],
+  ['rails new .', 'rails new . && git add -A && git commit -m x'],
+  ['npx create-next-app .', 'npx create-next-app@latest . && git add -A && git commit -m x'],
+  ['npm create', 'npm create vite@latest . && git add -A && git commit -m x'],
+  ['a .git file written', 'echo "gitdir: /repo/.git" > .git && git commit -am x'],
+  ['a tree copied in', 'cp -r ../repo/. . && git commit -am x'],
+  ['a tree synced in', 'rsync -a ../repo/ ./ && git commit -am x'],
+  ['a repository unpacked', 'tar xf repo.tar && git add -A && git commit -m x'],
+  ['a zip unpacked', 'unzip repo.zip && git commit -am x'],
+  ['a folder linked', 'ln -s /repo/.git .git && git commit -am x'],
+  ['--separate-git-dir', 'git init --separate-git-dir=/g && git commit -m x'],
 ]
 for (const [name, command] of FINDS) {
   test(`outside a repository a commit is still blocked when the command can find one: ${name}`, async ($, on) => {
@@ -844,6 +863,17 @@ for (const [name, command] of FINDS) {
     expect(r.deny).toContain('the guard could not check this commit')
   })
 }
+
+// Codex, PR #38: /repo is a clean repository; the session folder /scratch is in
+// none until the worktree add makes it one, so it must not be skipped
+test('a worktree added into the session folder blocks the commit there', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, outside: true, cwd: '/scratch', repos: ['/repo'] })
+  const command = "git -C /repo worktree add --detach /scratch && printf 'API_KEY=x\\n' > .env && git add -A && git commit -m x"
+  const r = await call($, { tool: 'Bash', command })
+  expect(r.deny).toContain("couldn't read git state in /scratch (the session directory)")
+  expect(dirsAsked(argvs)).toContain('')
+})
 
 // Each place git may run is skipped on its own: the other is still checked
 test('a session outside a repository still checks where a cd may have gone', async ($, on) => {
@@ -875,5 +905,6 @@ test('mayFindRepo leaves the commands from #37 alone', async () => {
   for (const [, command] of MENTIONS) expect(mayFindRepo(command)).toBe(false)
   expect(mayFindRepo('git push https://github.com/o/r.git && git commit -m x')).toBe(false)
   expect(mayFindRepo('git commit -m "initial"')).toBe(false)
+  for (const word of ['ecp -x', 'tarball', 'unzipped', 'newline', 'recreate-it']) expect(mayFindRepo(`echo ${word} && git commit -m x`)).toBe(false)
   for (const [, command] of FINDS) expect(mayFindRepo(command)).toBe(true)
 })

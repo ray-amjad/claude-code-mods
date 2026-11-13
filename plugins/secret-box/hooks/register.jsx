@@ -967,18 +967,28 @@ export function isNotARepo(r) {
   return r.exitCode === 128 && /^fatal: not a git repository\b/m.test(String(r.stderr || ''))
 }
 
-// Whether the command could make its git find a repository the check didn't:
-// create one (git init, git clone, gh repo clone, a .git copied or moved in),
-// point git at one (GIT_DIR, GIT_WORK_TREE, --git-dir, --work-tree), widen the
-// search (GIT_CEILING_DIRECTORIES, GIT_DISCOVERY_ACROSS_FILESYSTEM), or move
-// where git runs in a way gitDirs does not follow (env -C, sudo -D, --chdir,
-// source, ., eval). Then "not a repository now" is not "can't commit", and the
-// failed check blocks as before. Read anywhere in the text: when unsure, block.
+// Whether the command could make its git find a repository the check didn't.
+// Then "not a repository now" is not "can't commit", and the failed check
+// blocks as before. Each is read anywhere in the text, strings too: when
+// unsure, block. A folder becomes a repository, or git is pointed at one, by:
 const FINDS_REPO = [
-  /\b(init|clone)\b/,
+  // a tool that makes or fetches one: git init / clone, git worktree add or
+  // move, git submodule add / update, scalar clone, gh repo clone, gh repo
+  // create --clone, jj git init / clone, jj workspace add, cargo init, uv init
+  /\b(init|clone|worktree|submodule|scalar)\b/,
+  /\bworkspace\s+add\b/,
+  // a project scaffolder, most of which run git init in the folder they make:
+  // rails new ., cargo new, npm create x, npx create-next-app .
+  /\b(rails|cargo|dotnet)\s+new\b|\b(npm|pnpm|yarn|bun)\s+create\b|\bcreate-[a-z]/,
+  // a .git written, copied, moved or linked in (cp -r ../r/.git ., echo gitdir: x > .git)
+  /(^|[\s'"=:\/\\])\.git([\s'"\/\;&|)]|$)/,
+  // a tree copied, moved, linked or unpacked in, which may hold a .git of its own
+  /(^|[\s;&|({`]|\$\()(cp|mv|ln|rsync|tar|bsdtar|unzip|7z|7za|cpio|ditto|robocopy|xcopy|Copy-Item|Move-Item|Expand-Archive)\s/,
+  // git pointed at one, or its search widened (GIT_DIR, --work-tree ...)
   /\bGIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)\b/,
-  /--(git-dir|work-tree|chdir)\b/,
-  /(^|[\s'"=:\/\\])\.git([\s'"\/\\;&|)]|$)/,
+  /--(git-dir|work-tree|separate-git-dir|chdir)\b/,
+  // git run somewhere gitDirs does not follow: env -C, sudo -D, a sourced
+  // script or eval
   /\b(env|sudo)\b[^;&|\n]*\s-\w*[CD]/,
   /(^|[;&|({\n`]|\$\()\s*(source|\.|eval)\s/,
 ]
