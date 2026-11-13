@@ -266,7 +266,8 @@ export function isAbsolute(path) {
 // The commands inside $( ) and backticks come out as commands too, and so do
 // a quoted string or a heredoc body that itself runs git (bash -c '...',
 // ssh host "...", bash <<EOF): a miss there would skip a repository.
-function shellCommands(src) {
+// `spans`, when given, collects where the text is only data (see withoutData).
+function shellCommands(src, spans = null) {
   const out = []
   let i = 0
   const parse = (inSub) => {
@@ -286,6 +287,10 @@ function shellCommands(src) {
     // The operator that ended the last command at this level
     let lastOp
     const heredocs = []
+    // Quoted text and heredoc bodies of the command being read, which are only
+    // data if it turns out to be a data program whose output is not piped on
+    let pending = []
+    let owner = { data: false }
     const begin = () => {
       cont = false
       word ??= { parts: [], start: i }
@@ -313,6 +318,12 @@ function shellCommands(src) {
         words.prev = lastOp
         words.op = op
         lastOp = op
+        // Only at the top: in ( ), { }, an if or a loop the output may still be
+        // piped on as a whole: { cat <<'EOF'; } | sh. (A ) has already
+        // taken depth down when it ends the command inside it.)
+        const isTop = ctl === 0 && depth === 0 && op !== ')' && !inSub && !BODY.test(literal(words[0]) ?? '')
+        owner.data = spans !== null && isTop && op !== '|' && DATA_PROGRAM.test(commandName(words) ?? '')
+        if (owner.data) spans.push(...pending)
         afterPipe = false
         // if, while ... and { open a body, fi, done, esac and } close one:
         // as the leading words, and { after `function name`
@@ -328,6 +339,8 @@ function shellCommands(src) {
         out.push(words)
       }
       words = []
+      pending = []
+      owner = { data: false }
     }
     // A quoted string or heredoc body that runs git is shell code: read it too
     const nested = (text) => {
@@ -381,14 +394,20 @@ function shellCommands(src) {
     const readHeredocs = () => {
       for (const h of heredocs.splice(0)) {
         let body = ''
+        const from = i
+        let to = i
         while (i < src.length) {
           let end = src.indexOf('\n', i)
           if (end < 0) end = src.length
           const line = src.slice(i, end)
+          to = i
           i = Math.min(end + 1, src.length)
           if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) break
           body += line + '\n'
+          to = i
         }
+        // An unquoted delimiter's body still runs $( ) and backticks
+        if (h.owner.data && (h.quoted || !/[`]|\$\(/.test(body))) spans.push([from, to])
         nested(body)
       }
     }
@@ -430,7 +449,7 @@ function shellCommands(src) {
         while (src[i] === ' ' || src[i] === '\t') i++
         const m = src.slice(i).match(/^(?:'([^']*)'|"([^"]*)"|\\?([^\s;&|<>()]+))/)
         if (m) {
-          heredocs.push({ delim: m[1] ?? m[2] ?? m[3], strip })
+          heredocs.push({ delim: m[1] ?? m[2] ?? m[3], strip, quoted: !m[3] || m[0].startsWith('\\'), owner })
           i += m[0].length
         }
       } else if (ch === '<' || ch === '>') {
@@ -443,17 +462,21 @@ function shellCommands(src) {
         if (end < 0) end = src.length
         const text = src.slice(i + 1, end)
         part({ lit: text, q: true })
+        pending.push([i + 1, end])
         i = end + 1
         nested(text)
       } else if (ch === '$' && src[i + 1] === "'") {
         begin()
         let text = ''
+        const from = i + 2
         for (i += 2; i < src.length && src[i] !== "'"; i++) text += src[i] === '\\' && i + 1 < src.length ? src[++i] : src[i]
+        pending.push([from, i])
         i++
         part({ lit: text, q: true })
       } else if (ch === '"') {
         let text = ''
         part({ lit: '', q: true })
+        const from = i + 1
         for (i++; i < src.length && src[i] !== '"';) {
           if (src[i] === '\\' && '$`"\\\n'.includes(src[i + 1] || 'x')) {
             if (src[i + 1] !== '\n') part({ lit: src[i + 1], q: true })
@@ -472,6 +495,8 @@ function shellCommands(src) {
             text += src[i++]
           }
         }
+        // $( ) and backticks in double quotes run: such a string is not only data
+        if (!/[`]|\$\(/.test(text)) pending.push([from, i])
         i++
         nested(text)
       } else if (ch === '\\') {
@@ -513,6 +538,64 @@ function unsure(cmds) {
     c.inner = true
   }
   return cmds
+}
+
+// Programs that take their quoted arguments and heredoc as data, not as shell
+// code: a search pattern, text to print or write, a script in another
+// language. (python and node could run a shell themselves; the guard can't
+// read a commit made that way anyway, e.g. subprocess.run(['git', 'commit']).)
+// Not a shell, ssh, eval, xargs, su, watch ...: what they get is run.
+const DATA_PROGRAM = /^(grep|egrep|fgrep|rg|ag|ack|sed|awk|gawk|jq|echo|printf|cat|python[\d.]*|py|node|deno|ruby|perl|php)$/
+const WRAPPERS = /^(env|sudo|nohup|nice|time|command|builtin|exec|stdbuf)$/
+// Words that open or continue a body (time and ! do not)
+const BODY = /^(if|then|elif|else|do|while|until|\{)$/
+// What else may run beside the data for it to stay data: programs that run no
+// code of their own. Not a shell, ., source, ./x, make, npm run, xargs, find,
+// eval, $x ...: any of them could run a file the command just wrote.
+const INERT = /^(cd|pushd|popd|pwd|ls|mkdir|touch|true|false|test|\[|:|wc|head|tail|sort|uniq|cut|tr|diff|tee|fi|done|esac|\})$/
+
+// The program a simple command runs: past VAR=x, if/then/do ..., and env,
+// sudo, nohup ... with their options. null when that can't be told.
+function commandName(words) {
+  let wrapped = false
+  for (const w of words) {
+    const t = literal(w)
+    if (t === null) return null
+    if (LEADS.test(t) || isAssignment(w) || (wrapped && /^-/.test(t))) continue
+    if (WRAPPERS.test(t)) {
+      wrapped = true
+      continue
+    }
+    return t.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
+  }
+  return null
+}
+
+// The command with the text that is only data blanked out: each quoted
+// string and heredoc body given to a DATA_PROGRAM at the command's own level,
+// whose output is not piped on (into sh, say). Not blanked: anything in
+// $( ) or backticks (its output becomes code or arguments), a double-quoted
+// string or unquoted heredoc holding $( ) or a backtick (they run), and
+// anything the reading here gets wrong, which is then still checked. Nothing
+// is blanked when anything else in the command could run code.
+export function withoutData(cmd) {
+  const spans = []
+  shellCommands(cmd, spans)
+  let out = ''
+  let at = 0
+  for (const [from, to] of spans.sort((a, b) => a[0] - b[0])) {
+    if (from < at) continue
+    out += cmd.slice(at, from) + cmd.slice(from, to).replace(/[^\n]/g, ' ')
+    at = to
+  }
+  out += cmd.slice(at)
+  // Codex, PR #38: data the same command then runs (> run.sh && . ./run.sh)
+  // is code. Every command left must be a data program or an inert one.
+  const runsOnly = shellCommands(out).every(c => {
+    const name = commandName(c)
+    return name === null ? c.every(isAssignment) : DATA_PROGRAM.test(name) || INERT.test(name)
+  })
+  return runsOnly ? out : cmd
 }
 
 // A word that is only literal text, as the command will see it
@@ -912,10 +995,13 @@ async function commitBlockReason($, cmd) {
   // (git add ... && git commit, or commit -a), count what it could stage too:
   // every changed or untracked file git does not ignore.
   const stages = gitRuns(cmd, 'add|stage') || /\bcommit\b[^;&|]*\s(-a|--all|-\w*a\w*)\b/.test(cmd)
+  // #37: whether a git commit is still there with the data taken out: one the
+  // shell runs, not one named in a grep pattern, a heredoc or a script's text
+  const runsCommit = gitRuns(withoutData(cmd), 'commit')
   // In these two cases nothing was checked: say so, so a parsing problem
   // doesn't read like a found secret, or like a clean check
   const unsure = 'This is not a detected .env: the guard could not check this commit, so it blocks it. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
-  for (const dir of await gitDirs($, cmd)) {
+  dirs: for (const dir of await gitDirs($, cmd)) {
     if (typeof dir !== 'string') {
       return dir.kind === 'cd'
         ? `couldn't resolve the directory \`${dir.unresolved}\` moves to before git runs (cd -, popd, a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
@@ -932,10 +1018,17 @@ async function commitBlockReason($, cmd) {
     // -z: names come NUL-separated and as they are. Without it git quotes a
     // name with non-ASCII, a quote, a backslash or a newline in it
     // ("caf\303\251/.env"), and the quoted name doesn't end in .env.
-    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z'])]
-    if (stages) checks.push(git(['ls-files', '-z', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { GIT_LITERAL_PATHSPECS: '0' } }))
+    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z'], { env: ENGLISH })]
+    if (stages) checks.push(git(['ls-files', '-z', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { ...ENGLISH, GIT_LITERAL_PATHSPECS: '0' } }))
     for (const r of await Promise.all(checks)) {
       if (r.exitCode !== 0) {
+        // #37: the command commits nothing, it only names a commit in data,
+        // and this directory is in no repository: nothing here can be
+        // committed. Any real git commit keeps the block, whatever ran before
+        // it (git init, a clone, an unzip ...). Asked on its own: outside a
+        // repository git diff --cached becomes diff --no-index and fails on
+        // its options instead (exit 129).
+        if (!runsCommit && isNotARepo(await git(['rev-parse', '--git-dir'], { env: ENGLISH }))) continue dirs
         const said = String(r.stderr || '').trim().split('\n')[0]
         return `couldn't read git state in ${await where($, dir)}${said ? ` (git: ${said})` : ''}. ${unsure}`
       }
@@ -948,6 +1041,18 @@ async function commitBlockReason($, cmd) {
     }
   }
   return ''
+}
+
+// git's own messages, untranslated, so "not a repository" can be told apart.
+// LC_ALL=C turns gettext off; LANGUAGE would win over a non-C LC_ALL. A message
+// translated anyway is just another failure, and blocks.
+const ENGLISH = { LC_ALL: 'C', LANGUAGE: 'C' }
+
+// Whether git failed only because the directory is in no repository. Not a
+// missing directory ("cannot change to": the same command may make it), not
+// "dubious ownership" (a repository git would not read), not anything else.
+export function isNotARepo(r) {
+  return r.exitCode === 128 && /^fatal: not a git repository\b/m.test(String(r.stderr || ''))
 }
 
 // The directory git ran in, for a message: the session's own is named, since
