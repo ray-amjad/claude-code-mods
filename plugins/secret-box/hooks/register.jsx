@@ -321,7 +321,7 @@ function shellCommands(src, spans = null) {
         // Only at the top: in ( ), { }, an if or a loop the output may still be
         // piped on as a whole: { cat <<'EOF'; } | sh. (A ) has already
         // taken depth down when it ends the command inside it.)
-        const isTop = ctl === 0 && depth === 0 && op !== ')' && !inSub && !LEADS.test(literal(words[0]) ?? '')
+        const isTop = ctl === 0 && depth === 0 && op !== ')' && !inSub && !BODY.test(literal(words[0]) ?? '')
         owner.data = spans !== null && isTop && op !== '|' && DATA_PROGRAM.test(commandName(words) ?? '')
         if (owner.data) spans.push(...pending)
         afterPipe = false
@@ -547,6 +547,12 @@ function unsure(cmds) {
 // Not a shell, ssh, eval, xargs, su, watch ...: what they get is run.
 const DATA_PROGRAM = /^(grep|egrep|fgrep|rg|ag|ack|sed|awk|gawk|jq|echo|printf|cat|python[\d.]*|py|node|deno|ruby|perl|php)$/
 const WRAPPERS = /^(env|sudo|nohup|nice|time|command|builtin|exec|stdbuf)$/
+// Words that open or continue a body (time and ! do not)
+const BODY = /^(if|then|elif|else|do|while|until|\{)$/
+// What else may run beside the data for it to stay data: programs that run no
+// code of their own. Not a shell, ., source, ./x, make, npm run, xargs, find,
+// eval, $x ...: any of them could run a file the command just wrote.
+const INERT = /^(cd|pushd|popd|pwd|ls|mkdir|touch|true|false|test|\[|:|wc|head|tail|sort|uniq|cut|tr|diff|tee|fi|done|esac|\})$/
 
 // The program a simple command runs: past VAR=x, if/then/do ..., and env,
 // sudo, nohup ... with their options. null when that can't be told.
@@ -570,7 +576,8 @@ function commandName(words) {
 // whose output is not piped on (into sh, say). Not blanked: anything in
 // $( ) or backticks (its output becomes code or arguments), a double-quoted
 // string or unquoted heredoc holding $( ) or a backtick (they run), and
-// anything the reading here gets wrong, which is then still checked.
+// anything the reading here gets wrong, which is then still checked. Nothing
+// is blanked when anything else in the command could run code.
 export function withoutData(cmd) {
   const spans = []
   shellCommands(cmd, spans)
@@ -581,7 +588,14 @@ export function withoutData(cmd) {
     out += cmd.slice(at, from) + cmd.slice(from, to).replace(/[^\n]/g, ' ')
     at = to
   }
-  return out + cmd.slice(at)
+  out += cmd.slice(at)
+  // Codex, PR #38: data the same command then runs (> run.sh && . ./run.sh)
+  // is code. Every command left must be a data program or an inert one.
+  const runsOnly = shellCommands(out).every(c => {
+    const name = commandName(c)
+    return name === null ? c.every(isAssignment) : DATA_PROGRAM.test(name) || INERT.test(name)
+  })
+  return runsOnly ? out : cmd
 }
 
 // A word that is only literal text, as the command will see it

@@ -926,6 +926,18 @@ for (const command of [
   "{ cat <<'EOF'; } | sh\ngit commit -am x\nEOF",
   "if true; then echo 'git commit -am x'; fi | sh",
   "for i in 1; do printf 'git commit -am x'; done | bash",
+  // Codex final pass, PR #38: data written, then run by the same command
+  "git init && printf '%s\\n' 'git add -A && git commit -m x' > run.sh && . ./run.sh",
+  "echo 'git commit -am x' > run.sh; source run.sh",
+  "echo 'git commit -am x' > run.sh && sh run.sh",
+  "echo 'git commit -am x' > run.sh && bash run.sh",
+  "echo 'git commit -am x' > run.sh && chmod +x run.sh && ./run.sh",
+  "echo 'git commit -am x' > /tmp/run && /tmp/run",
+  "printf 'x:\\n\\t%s\\n' 'git commit -am x' > Makefile && make x",
+  "echo 'git commit -am x' > s && npm run go",
+  "x=$(cat s); echo 'git commit -am x' > s; $x",
+  "echo 'git commit -am x' > s; xargs -a s -I{} sh -c {}",
+  "echo 'git commit -am x' > s.sh; find . -name s.sh -exec sh {} \\;",
 ]) {
   test(`outside a repository a commit the shell runs still blocks: ${JSON.stringify(command)}`, async ($, on) => {
     gitStub(on, { outside: true, cwd: '/scratch' })
@@ -938,6 +950,9 @@ for (const command of [
   "cat > NOTES.md <<'EOF'\nthen git init && git add -A && git commit -m first\nEOF",
   "sed -i 's/TODO/git commit -am wip/' NOTES.md",
   "node -e \"console.log('git commit -am x')\"",
+  "time grep -n 'git commit' docs",
+  "cd docs && grep -rn 'git commit -am x' . | head -5",
+  "mkdir -p notes && echo '- [ ] git commit -am wip' >> notes/TODO.md",
 ]) {
   test(`outside a repository a commit named only in data goes through: ${JSON.stringify(command)}`, async ($, on) => {
     gitStub(on, { outside: true, cwd: '/scratch' })
