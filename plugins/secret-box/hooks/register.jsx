@@ -915,7 +915,7 @@ async function commitBlockReason($, cmd) {
   // In these two cases nothing was checked: say so, so a parsing problem
   // doesn't read like a found secret, or like a clean check
   const unsure = 'This is not a detected .env: the guard could not check this commit, so it blocks it. Name the directory plainly (git -C /path/to/repo) or commit in a separate call.'
-  for (const dir of await gitDirs($, cmd)) {
+  dirs: for (const dir of await gitDirs($, cmd)) {
     if (typeof dir !== 'string') {
       return dir.kind === 'cd'
         ? `couldn't resolve the directory \`${dir.unresolved}\` moves to before git runs (cd -, popd, a variable this command does not set itself, a substitution, or too many possible values). ${unsure}`
@@ -932,10 +932,15 @@ async function commitBlockReason($, cmd) {
     // -z: names come NUL-separated and as they are. Without it git quotes a
     // name with non-ASCII, a quote, a backslash or a newline in it
     // ("caf\303\251/.env"), and the quoted name doesn't end in .env.
-    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z'])]
-    if (stages) checks.push(git(['ls-files', '-z', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { GIT_LITERAL_PATHSPECS: '0' } }))
+    const checks = [git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z'], { env: ENGLISH })]
+    if (stages) checks.push(git(['ls-files', '-z', '--full-name', '--modified', '--others', '--exclude-standard', '--', ':/'], { env: { ...ENGLISH, GIT_LITERAL_PATHSPECS: '0' } }))
     for (const r of await Promise.all(checks)) {
       if (r.exitCode !== 0) {
+        // #37: in no repository a git commit fails too and commits nothing;
+        // often the "commit" was only text in a string. Asked on its own:
+        // outside a repository git diff --cached turns into diff --no-index
+        // and fails on its options instead (exit 129).
+        if (!mayFindRepo(cmd) && isNotARepo(await git(['rev-parse', '--git-dir'], { env: ENGLISH }))) continue dirs
         const said = String(r.stderr || '').trim().split('\n')[0]
         return `couldn't read git state in ${await where($, dir)}${said ? ` (git: ${said})` : ''}. ${unsure}`
       }
@@ -948,6 +953,37 @@ async function commitBlockReason($, cmd) {
     }
   }
   return ''
+}
+
+// git's own messages, untranslated, so "not a repository" can be told apart.
+// LC_ALL=C turns gettext off; LANGUAGE would win over a non-C LC_ALL. A message
+// translated anyway is just another failure, and blocks.
+const ENGLISH = { LC_ALL: 'C', LANGUAGE: 'C' }
+
+// Whether git failed only because the directory is in no repository. Not a
+// missing directory ("cannot change to": the same command may make it), not
+// "dubious ownership" (a repository git would not read), not anything else.
+export function isNotARepo(r) {
+  return r.exitCode === 128 && /^fatal: not a git repository\b/m.test(String(r.stderr || ''))
+}
+
+// Whether the command could make its git find a repository the check didn't:
+// create one (git init, git clone, gh repo clone, a .git copied or moved in),
+// point git at one (GIT_DIR, GIT_WORK_TREE, --git-dir, --work-tree), widen the
+// search (GIT_CEILING_DIRECTORIES, GIT_DISCOVERY_ACROSS_FILESYSTEM), or move
+// where git runs in a way gitDirs does not follow (env -C, sudo -D, --chdir,
+// source, ., eval). Then "not a repository now" is not "can't commit", and the
+// failed check blocks as before. Read anywhere in the text: when unsure, block.
+const FINDS_REPO = [
+  /\b(init|clone)\b/,
+  /\bGIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)\b/,
+  /--(git-dir|work-tree|chdir)\b/,
+  /(^|[\s'"=:\/\\])\.git([\s'"\/\\;&|)]|$)/,
+  /\b(env|sudo)\b[^;&|\n]*\s-\w*[CD]/,
+  /(^|[;&|({\n`]|\$\()\s*(source|\.|eval)\s/,
+]
+export function mayFindRepo(cmd) {
+  return FINDS_REPO.some(re => re.test(cmd))
 }
 
 // The directory git ran in, for a message: the session's own is named, since

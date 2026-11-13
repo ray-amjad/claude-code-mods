@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromMsys, isAbsolute, isEnvFile, isNotFound, lexical, WAITS } from '../hooks/register'
+import { fromMsys, isAbsolute, isEnvFile, isNotARepo, isNotFound, lexical, mayFindRepo, WAITS } from '../hooks/register'
 
 // Fake keys, built at run time so no key-shaped string sits in the repo
 const STRIPE = 'sk_' + 'live_' + 'A1b2C3d4E5f6G7h8J9k0L1m2'
@@ -169,8 +169,9 @@ test('a .env file that cannot be checked still runs, and is scanned', async ($, 
 // is the one whose index holds a .env ('' the session's), `untracked` the one
 // with an untracked .env; `env` is the environment, `cwd` the session's
 // directory (`cwdFails`: it can't be read), and `outside` puts it outside any repository.
+// `sessionError`: git fails in the session directory with this message (exit 128).
 // `raw`: the lists go out exactly as written, for names that hold a newline.
-function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean; envs?: (Record<string, string> | undefined)[]; raw?: boolean }) {
+function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean; argvs?: string[][]; repos?: string[]; dirty?: string; untracked?: string; env?: Record<string, string>; cwd?: string; cwdFails?: boolean; outside?: boolean; sessionError?: string; envs?: (Record<string, string> | undefined)[]; raw?: boolean }) {
   on('tool.call', () => ({ result: 'ran' }))
   on('session.cwd', () => {
     if (opts.cwdFails) throw new Error('no cwd')
@@ -185,7 +186,13 @@ function gitStub(on: any, opts: { index?: string; tree?: string; fails?: boolean
     if (opts.fails || (opts.repos && dir && !opts.repos.includes(dir))) {
       return { value: { exitCode: 128, stdout: '', stderr: `fatal: cannot change to '${dir}': No such file or directory` } }
     }
+    if (!dir && opts.sessionError !== undefined) {
+      return { value: { exitCode: 128, stdout: '', stderr: opts.sessionError } }
+    }
+    // As git 2.39 does: outside a repository diff --cached becomes
+    // diff --no-index and fails on its options; ls-files and rev-parse say why
     if (!dir && opts.outside) {
+      if (e.argv.includes('diff')) return { value: { exitCode: 129, stdout: '', stderr: "error: unknown option `cached'\nusage: git diff --no-index [<options>] <path> <path>" } }
       return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' } }
     }
     // The lists are written one name per line; git -z gives one per NUL
@@ -221,6 +228,7 @@ test('git -C checks the repository it names', async ($, on) => {
 // #31: a -C directory the guard mis-read used to block a clean commit.
 // Each case: the command, and the directories git is asked about. None holds a .env.
 const DIR = '/path/to/repo'
+const DUBIOUS = "fatal: detected dubious ownership in repository at '/scratch'"
 const GIT_DIRS: [string, string, string[]][] = [
   ['git -C text inside a quoted commit message', `git -C ${DIR} commit -m "Workers: usar git -C en vez de cd"`, [DIR]],
   ['git -C text inside a single-quoted message', `git -C ${DIR} commit -m 'see git -C en'`, [DIR]],
@@ -552,10 +560,10 @@ test('fromMsys turns only a drive-letter path', async () => {
 })
 
 // When git can't read a directory, the message names the one it tried
-test('a session directory outside a repository is named in the message', async ($, on) => {
-  gitStub(on, { outside: true, cwd: '/scratch' })
+test('a session directory git cannot read is named in the message', async ($, on) => {
+  gitStub(on, { sessionError: DUBIOUS, cwd: '/scratch' })
   const r = await call($, { tool: 'Bash', command: 'git commit -m msg' })
-  expect(r.deny).toContain("couldn't read git state in /scratch (the session directory) (git: fatal: not a git repository")
+  expect(r.deny).toContain("couldn't read git state in /scratch (the session directory) (git: fatal: detected dubious ownership")
   expect(r.deny).toContain('This is not a detected .env')
 })
 
@@ -725,7 +733,7 @@ for (const command of [
     const at = argvs.findIndex(a => a.includes('ls-files'))
     expect(argvs[at].join(' ')).toBe(`git -C ${DIR}/sub ${LS}`)
     // GIT_LITERAL_PATHSPECS=1 would read :/ as a file name and list nothing
-    expect(envs[at]).toEqual({ GIT_LITERAL_PATHSPECS: '0' })
+    expect(envs[at]).toEqual({ LC_ALL: 'C', LANGUAGE: 'C', GIT_LITERAL_PATHSPECS: '0' })
   })
 }
 
@@ -765,4 +773,107 @@ test('a name with a newline before .env is one name, not a .env', async ($, on) 
 test('a clean -z listing with unusual names lets the commit through', async ($, on) => {
   gitStub(on, { raw: true, index: 'café/a.ts\0a"b c/x.env.example\0', tree: 'café/sub/keep.txt\0', outside: true })
   expect((await call($, { tool: 'Bash', command: `cd ${DIR}/café/sub && git add -A && git commit -m x` })).deny).toBeUndefined()
+})
+
+// #37: outside a repository a commit fails, so a command that only names one
+// in a string goes through. The three commands from the issue, run from /scratch.
+const MENTIONS: [string, string][] = [
+  ['a Python heredoc writing a Markdown to-do', "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('TODO.md')\np.write_text(p.read_text() + '- [ ] fold the branch: `git checkout main && git merge --squash fix && git commit -m fold`\\n')\nEOF"],
+  ['a grep -E pattern', 'grep -rnE "git commit( -[am])?" docs/'],
+  ['a one-line Python edit', `python3 -c "import pathlib; p=pathlib.Path('NOTES.md'); p.write_text(p.read_text().replace('TODO', 'git commit -am wip'))"`],
+]
+for (const [name, command] of MENTIONS) {
+  test(`a commit named in a string goes through outside a repository: ${name}`, async ($, on) => {
+    const argvs: string[][] = []
+    const envs: (Record<string, string> | undefined)[] = []
+    gitStub(on, { argvs, envs, outside: true, cwd: '/scratch' })
+    expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+    // it was checked, and git said "not a git repository" in English
+    expect(dirsAsked(argvs)).toEqual([''])
+    const probe = argvs.findIndex(a => a.join(' ') === 'git rev-parse --git-dir')
+    expect(probe).toBeGreaterThan(0)
+    expect(envs[probe]).toEqual({ LC_ALL: 'C', LANGUAGE: 'C' })
+  })
+}
+
+test('a real commit is still blocked when the repository has a .env staged', async ($, on) => {
+  gitStub(on, { dirty: '', cwd: '/repo' })
+  expect((await call($, { tool: 'Bash', command: 'git commit -m wip' })).deny).toContain('would include a .env file')
+})
+
+// Any other failure still blocks: git could not say what the commit holds
+for (const [name, stderr] of [
+  ['dubious ownership', DUBIOUS],
+  ['a broken index', 'fatal: index file corrupt'],
+  ['a translated "not a git repository"', 'fatal: Kein Git-Repository (oder irgendeines der Elternverzeichnisse): .git'],
+  ['no message at all', ''],
+] as const) {
+  test(`a commit is still blocked when git fails another way: ${name}`, async ($, on) => {
+    gitStub(on, { sessionError: stderr, cwd: '/scratch' })
+    const r = await call($, { tool: 'Bash', command: 'git commit -m wip' })
+    expect(r.deny).toContain("couldn't read git state in /scratch")
+    expect(r.deny).toContain('the guard could not check this commit')
+  })
+}
+
+// Not a repository now is not "can't commit" when the same command can make
+// git find one: it makes or fetches one, points git at one, or moves git in a
+// way the guard does not follow. These still block.
+const FINDS: [string, string][] = [
+  ['git init first', 'git init && git add -A && git commit -m init'],
+  ['git init in a new folder', 'mkdir app && cd app && git init && git add -A && git commit -m init'],
+  ['git clone into the folder', 'git clone https://github.com/o/r . && git add -A && git commit -m x'],
+  ['gh repo clone', 'gh repo clone o/r . && git commit -am x'],
+  ['a .git copied in', 'cp -r ../r/.git . && git commit -am x'],
+  ['GIT_DIR for the commit', 'GIT_DIR=/elsewhere/.git git commit -m x'],
+  ['GIT_DIR exported', 'export GIT_DIR=/elsewhere/r.git; git commit -m x'],
+  ['GIT_WORK_TREE exported', 'export GIT_WORK_TREE=/w && git commit -m x'],
+  ['--git-dir and --work-tree', 'git --git-dir=/elsewhere/r.git --work-tree=/w commit -m x'],
+  ['GIT_DISCOVERY_ACROSS_FILESYSTEM', 'GIT_DISCOVERY_ACROSS_FILESYSTEM=1 git commit -m x'],
+  ['env -C', 'env -C /elsewhere git commit -m x'],
+  ['sudo -D', 'sudo -D /elsewhere git commit -m x'],
+  ['a sourced script', 'source ./enter.sh && git commit -m x'],
+  ['eval', 'eval "$GO" && git commit -m x'],
+]
+for (const [name, command] of FINDS) {
+  test(`outside a repository a commit is still blocked when the command can find one: ${name}`, async ($, on) => {
+    // repos: [] - a folder the command makes (app) is not there yet
+    gitStub(on, { outside: true, cwd: '/scratch', repos: [] })
+    const r = await call($, { tool: 'Bash', command })
+    expect(r.deny).toContain("couldn't read git state in")
+    expect(r.deny).toContain('the guard could not check this commit')
+  })
+}
+
+// Each place git may run is skipped on its own: the other is still checked
+test('a session outside a repository still checks where a cd may have gone', async ($, on) => {
+  const argvs: string[][] = []
+  gitStub(on, { argvs, outside: true, cwd: '/scratch', repos: [DIR], dirty: DIR })
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; git commit -m msg` })).deny).toContain('would include a .env file')
+  expect(dirsAsked(argvs)).toEqual(['', DIR])
+})
+
+test('a session outside a repository and a clean cd target let the commit through', async ($, on) => {
+  gitStub(on, { outside: true, cwd: '/scratch', repos: [DIR] })
+  expect((await call($, { tool: 'Bash', command: `cd ${DIR}; git commit -m msg` })).deny).toBeUndefined()
+})
+
+test('a cd directory that is not there still blocks: the command may make it', async ($, on) => {
+  gitStub(on, { outside: true, cwd: '/scratch', repos: [DIR] })
+  expect((await call($, { tool: 'Bash', command: 'cd /new && git commit -m msg' })).deny).toContain("cannot change to '/new'")
+})
+
+test('isNotARepo takes git\'s not-a-repository failure only', async () => {
+  expect(isNotARepo({ exitCode: 128, stderr: 'fatal: not a git repository (or any of the parent directories): .git' })).toBe(true)
+  expect(isNotARepo({ exitCode: 128, stderr: 'fatal: not a git repository (or any parent up to mount point /mnt)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).' })).toBe(true)
+  expect(isNotARepo({ exitCode: 1, stderr: 'fatal: not a git repository' })).toBe(false)
+  expect(isNotARepo({ exitCode: 128, stderr: DUBIOUS })).toBe(false)
+  expect(isNotARepo({ exitCode: 128, stderr: "fatal: cannot change to '/x': No such file or directory" })).toBe(false)
+})
+
+test('mayFindRepo leaves the commands from #37 alone', async () => {
+  for (const [, command] of MENTIONS) expect(mayFindRepo(command)).toBe(false)
+  expect(mayFindRepo('git push https://github.com/o/r.git && git commit -m x')).toBe(false)
+  expect(mayFindRepo('git commit -m "initial"')).toBe(false)
+  for (const [, command] of FINDS) expect(mayFindRepo(command)).toBe(true)
 })
