@@ -370,8 +370,12 @@ export const register: Register = (on, options) => {
     const rows = Math.max(1, Math.min(5, e.props.maxRows - 2))
     const bar = (p: number) => '█'.repeat(Math.round(p * width)).padEnd(width, '·')
     const nextMode = MODES[(MODES.indexOf(current) + 1) % MODES.length] ?? 'observe'
-    // Bands of other mods, drawn under this one
-    const below = await next(e)
+    // The bands of other mods draw under ours, with the rows ours takes off; one that fails must not take ours with it
+    const shown = 1 + Math.min(rows, result?.ranked.length ?? 0)
+    let below = null
+    try {
+      below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - shown) } })
+    } catch {}
 
     return (
       <Box flexDirection="column">
