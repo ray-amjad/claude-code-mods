@@ -77,11 +77,11 @@ async function explainRoot($, answer) {
   $.ui.invalidate('ui.render')
 }
 
-// Explore option i of the node the pane shows: fork the real session at that node's
-// question, tell the fork we picked i, and let it play that out with read-only tools.
 // Explore from a command or the pane: a failure is logged, never left unhandled
 const startExplore = ($, i, own) => explore($, i, own).catch(err => $.ui.log('explore failed: ' + err))
 
+// Explore option i of the node the pane shows: fork the real session at that node's
+// question, tell the fork we picked i, and let it play that out with read-only tools.
 // With own, the answer is yours: it joins the question's options first, then is explored
 async function explore($, i, own) {
   const tree = root
