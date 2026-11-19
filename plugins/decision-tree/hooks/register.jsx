@@ -141,7 +141,6 @@ function whatIf(option) {
     'is none, give an empty question and options []. Shape: ' + SHAPE + '. No em or en dashes.'
 }
 
-// Turn a reply into the node's data, or mark the node failed
 function settle(node, text, reason) {
   const data = parseJson(text)
   if (data && Array.isArray(data.options)) {

@@ -22,7 +22,6 @@ const LINK = /\]\(([^)]+\.md)\)/
 const INDEX_MAX_LINES = 200
 const INDEX_MAX_CHARS = 200
 
-// Everything the band and the pane show
 const S = {
   runs: [],        // newest last: { id, at, why, status, before, after, changes, stamp, note }
   busy: false,     // a dream is running; Claude's own memory writes wait for it
@@ -43,7 +42,6 @@ export function register(on, options) {
     return next(e)
   })
 
-  // Trigger 1: every N turns of the main conversation, behind the gate
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId || e.isAborted) return result
@@ -65,7 +63,6 @@ export function register(on, options) {
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
-  // Trigger 3: /dream, plus undo, where and show
   on('command.run', { command: 'dream' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'where') $.ui.toast('memory folder: ' + (await memoryDir($, options)))
@@ -88,7 +85,6 @@ export function register(on, options) {
       : next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
-  // The band above the prompt: the latest dream, with Open, Undo and Hide
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const run = S.runs.findLast((r) => r.status !== 'tidy')
     if (e.props.hasSurvey || !run || run.id === S.hidden) return next(e)
@@ -106,7 +102,6 @@ export function register(on, options) {
       h(Button, { key: 'hide', label: 'Hide', onPress: () => { S.hidden = run.id; $.ui.invalidate('ui.render') } }))
   })
 
-  // The pane: every dream this session, newest first, one row per file
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     return h(Box, { flexDirection: 'column' },
@@ -181,7 +176,6 @@ export function indexProblems(files) {
   return out
 }
 
-// Each file's one-line description from its frontmatter
 function descriptions(files) {
   return Object.entries(files).filter(([n]) => n !== 'MEMORY.md')
     .map(([n, t]) => n + ': ' + ((t.match(/^description:\s*(.*)$/m) || [])[1] || '(none)')).join('\n')
@@ -303,7 +297,6 @@ export function parsePlan(text, files) {
       .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) })),
     rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && typeof w.content === 'string'),
     removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files),
-    // New memories only: an "added" file that already exists is ignored
     added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && typeof a.content === 'string'),
     index: typeof json.index === 'string' && json.index.trim() ? json.index.trim() + '\n' : null,
   }
@@ -333,7 +326,6 @@ async function apply($, dir, files, plan, stamp, why) {
     await $.fs.write(dir + '/' + a.file, a.content)
     changes.push({ kind: 'added', file: a.file, why: a.why || '' })
   }
-  // [[links]] to a merged file now point at the file it went into
   const moved = {}
   for (const m of plan.merged) {
     for (const from of m.from) {
@@ -351,7 +343,6 @@ async function apply($, dir, files, plan, stamp, why) {
     await $.fs.write(dir + '/MEMORY.md', plan.index)
     changes.push({ kind: 'index', file: 'MEMORY.md', why: plan.index.trim().split('\n').length + ' lines' })
   }
-  // What happened and why, kept beside the backup
   const log = ['# dream ' + stamp + ' (' + why + ')', '', ...changes.map((c) => c.kind + ' ' + c.file + ': ' + c.why)]
   await $.fs.write(backup + '/DREAM.md', log.join('\n') + '\n')
   return changes
@@ -483,7 +474,6 @@ export function suspects(files) {
   return [...new Set(pairs.sort((a, b) => b[0] - a[0]).flatMap(([, a, b]) => [a, b]))]
 }
 
-// Up to three lines that mention the memory's words, cut to 300 characters
 export function snippets(lines, words) {
   const out = []
   for (const line of lines) {
@@ -547,7 +537,6 @@ async function readMemory($, dir, dates = {}) {
   return files
 }
 
-// The folder a path is in, whichever separator it uses
 export function parentDir(path) {
   return path.replace(/[\\/][^\\/]+$/, '')
 }
@@ -612,7 +601,6 @@ async function removeFiles($, paths) {
   if (paths.length) await runJob($, 'remove', paths)
 }
 
-// Memories, not counting the index
 function count(files) {
   return Object.keys(files).filter((n) => n !== 'MEMORY.md').length
 }

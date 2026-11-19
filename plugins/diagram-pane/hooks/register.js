@@ -150,7 +150,6 @@ export function register(on, options) {
     }
   }).catch(() => ({ deny: 'diagram_set failed; the pane is unchanged.' }))
 
-  // The pane itself: lines of Text, rows of Buttons, and one Input
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Input } = $.ui.resolve(e)
     const items = paneItems(Math.max(30, e.props.bodyColumns || 60), actions($))
@@ -180,7 +179,6 @@ function catchUp($, messages) {
   return refreshMap($, messages, false)
 }
 
-// Read the saved map once, then pin what the transcript has that is new
 async function sync($) {
   const fresh = startSession(await $.session.id())
   const messages = await $.session.messages()
@@ -338,7 +336,6 @@ async function saveSaved($) {
   // Edits of pins that fell off the pane are no longer needed
   const edits = Object.fromEntries(Object.entries(S.edits).filter(([code]) => pinOf(code)))
   maps[S.sessionId] = { map: S.map, mapAt: S.mapAt, edits, view: S.view, at: await $.clock.now() }
-  // Keep the 20 newest sessions only
   const keep = Object.entries(maps).sort((a, b) => b[1].at - a[1].at).slice(0, 20)
   await $.store.set('maps', Object.fromEntries(keep))
 }
@@ -630,7 +627,6 @@ export function setDiagram(view, input) {
     changes.push(...r.changes)
   }
   if (title) changes.push('retitled it')
-  // A detail's ids must not clash with the rest of the tree
   if (path.length) next = adoptIds(next, allIds(setLevel(root, path, { nodes: [], edges: [] })), path.at(-1))
   // A detail with no boxes left is no detail: the box goes back to having none
   const tree = path.length ? setLevel(root, path, next.nodes.length ? next : null) : next
@@ -643,7 +639,6 @@ export function setDiagram(view, input) {
     `\`\`\`mermaid\n${toMermaid(next)}\n\`\`\``
 }
 
-// Store a changed tree as the map or as the pin it came from
 function commitRoot(view, graph, { edited = false, title }) {
   if (view.root === 'map') {
     S.map = {
@@ -807,7 +802,6 @@ function paneItems(w, act) {
     out.push({ lead: head, buttons: [{ key: 'pin:' + i, label: 'open ▸', onPress: () => act?.openPin(p.code) }] })
     if (p.graph) for (const l of drawGraph(marked(p.graph, false), w)) add(l)
     else {
-      // Not a flowchart we can draw: show the code as written, dimmed for mermaid
       if (p.kind === 'mermaid') add('(raw mermaid: only flowcharts are drawn)', { dim: true })
       for (const l of p.code.split('\n')) add(l, { dim: p.kind === 'mermaid' })
     }

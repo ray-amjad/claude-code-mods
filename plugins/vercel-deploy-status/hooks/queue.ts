@@ -61,7 +61,6 @@ export const COLOR: Record<State, string> = {
   CANCELED: 'red',
 }
 
-// The widest label, so the columns line up down the queue.
 export const LABEL_WIDTH = Math.max(...Object.values(LABEL).map((l) => l.length))
 
 export function num(v: unknown, fallback: number): number {
@@ -182,7 +181,6 @@ export async function findLinkedBelow(
 ): Promise<string | null> {
   let level = [root]
   for (let depth = 0; depth <= 2 && level.length > 0; depth++) {
-    // Each level is listed at once, not one folder after another
     const listed = await Promise.all(level.map(async (dir) => {
       const dirs = (await list(dir).catch(() => [] as Entry[])).filter((e) => e.kind === 'dir')
       const linked = dirs.some((e) => e.name === '.vercel') && (await exists(`${dir}/.vercel/project.json`).catch(() => false))

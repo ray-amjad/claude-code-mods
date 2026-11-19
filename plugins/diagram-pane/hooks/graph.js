@@ -48,7 +48,6 @@ export function setLevel(root, path, level) {
   return out
 }
 
-// Every node id in the tree, at every level
 export function allIds(g, out = new Set()) {
   for (const n of g?.nodes || []) {
     out.add(n.id)

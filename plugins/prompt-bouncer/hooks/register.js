@@ -64,7 +64,6 @@ export function register(on, options) {
 
     // Bounce: tell the user why (Claude Code puts the prompt back in the box to fix)
     bounces += 1
-    // The toast shows the fix when there is one, else the reason
     if (!headless) $.ui.toast('Bounced. ' + (verdict.suggestion || verdict.reason), { timeoutMs: 8000 })
     // One line: a drop reason with newlines in it is mangled
     return { drop: 'prompt-bouncer: ' + verdict.reason + (verdict.suggestion ? ' Try: ' + verdict.suggestion : '') + ' (Send it anyway: /force <prompt>)' }

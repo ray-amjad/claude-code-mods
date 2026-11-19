@@ -209,7 +209,6 @@ export function drawGraph(graph, width) {
   const layer = layers(nodes, edges)
   const rows = displayRows(nodes, edges, layer, width)
 
-  // Measure every box, then place the rows one under another
   const place = new Map()
   let y = 0
   const routed = new Set()
@@ -251,12 +250,12 @@ export function drawGraph(graph, width) {
       const s = BOX[a.n.box] || BOX.single
       // Enter straight down when the source sits above the target, else at its centre
       const tx = a.cx > b.x + 1 && a.cx < b.x + b.w - 2 ? a.cx : b.cx
-      put(a.y + a.h - 1, a.cx, s.out)          // the line leaves the box's bottom edge
+      put(a.y + a.h - 1, a.cx, s.out)
       for (let y = a.y + a.h; y <= g.y; y++) bit(y, a.cx, U | D) // down past shorter boxes
       bit(g.y + 1, a.cx, U)                   // turn onto the bus row
       for (let x = Math.min(a.cx, tx); x < Math.max(a.cx, tx); x++) { bit(g.y + 1, x, R); bit(g.y + 1, x + 1, L) }
       bit(g.y + 1, tx, D)
-      put(g.y + 2, tx, '▼')                  // and points into the target
+      put(g.y + 2, tx, '▼')
       if (e.label) labels.push({ e, y: g.y + 2, x: tx + 1 })
     }
   }
@@ -316,7 +315,6 @@ function displayRows(nodes, edges, layer, width) {
     }
     these.sort((a, b) => centre(a) - centre(b))
     these.forEach((n, i) => pos.set(n.id, i))
-    // Fill a row while the boxes fit side by side (labels up to 16 wide), then start another
     let row = [], used = 0
     for (const n of these) {
       const w = Math.min(longest(n.label), 16) + 4 + (row.length ? 2 : 0)

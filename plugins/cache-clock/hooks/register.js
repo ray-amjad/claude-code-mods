@@ -8,7 +8,6 @@ const DEFAULT_WARN_MIN = 5 // toast (and the onWarning action) when this much is
 
 const MIN = 60_000
 
-// State shared by the hooks below
 const cfg = { mainTtl: DEFAULT_MAIN_TTL_MIN * MIN, subTtl: DEFAULT_SUB_TTL_MIN * MIN, warn: DEFAULT_WARN_MIN * MIN, sound: false, pinned: false, onWarning: 'handoff', handoffDir: '' }
 let ttlSource = 'assumed' // 'measured' once we read it from the transcript
 let mainAt = 0 // when the main session last sent a request (ms)
@@ -21,7 +20,6 @@ let context = null // { tokens, window, percent } from $.session.usage()
 let transcript = null // path to this session's .jsonl
 let headless = false // -p / SDK session: no band, so skip the transcript reads too
 
-// Read a number of minutes from an env var, or keep the default
 function minutes(value, fallback) {
   const n = parseFloat(value ?? '')
   return Number.isFinite(n) && n > 0 ? n * MIN : fallback
@@ -89,7 +87,6 @@ async function lastRows($, path) {
   return lastLines(await $.fs.read(path).catch(() => ''), TAIL_ROWS)
 }
 
-// The last n lines of a file's text, CRLF or LF
 export function lastLines(text, n) {
   const lines = String(text).split(/\r?\n/)
   if (lines[lines.length - 1] === '') lines.pop()
@@ -111,7 +108,6 @@ function fmtTokens(n) {
 function snapshot(now) {
   const left = mainAt ? mainAt + cfg.mainTtl - now : 0
   const subLeft = subAt ? subAt + cfg.subTtl - now : 0
-  // Colour: green, then yellow in the last quarter, red inside the warning window
   let color = 'green'
   if (!mainAt || left <= 0) color = 'gray'
   else if (left <= cfg.warn) color = 'red'
@@ -164,7 +160,6 @@ async function sideRequest($, e, next) {
   return next(e)
 }
 
-// Once a second: warn near expiry, note when it goes cold, redraw the band
 async function tick($) {
   const s = snapshot(await $.clock.now())
   if (mainAt && s.left > 0 && s.left <= cfg.warn && !warned) {
@@ -250,7 +245,6 @@ export function register(on, options) {
   // The band itself: one line above the prompt, with the other mods' bands drawn under it
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    // Our line takes one row, so the bands below get one fewer
     // A band below that fails must not take ours with it
     let below = null
     try { below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - 1) } }) } catch {}

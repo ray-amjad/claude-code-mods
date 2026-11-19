@@ -54,8 +54,6 @@ export const register: Register = (on, options) => {
   const watchMs = num(options.watchAfterPushMinutes, 6) * 60 * 1000
   const maxRows = Math.floor(num(options.maxRows, 8))
 
-  // The band reads these; session.start's poll loop writes them. They live
-  // out here because the two hooks are separate closures.
   let project = 'vercel'
   let rows: Row[] = [] // the queue on the band, newest first
   let pushedAt: number | null = null // when a push last asked us to look

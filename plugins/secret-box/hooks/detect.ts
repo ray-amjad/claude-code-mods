@@ -1004,7 +1004,6 @@ function slashedSecret(run: string, named: boolean, cfg: Config): boolean {
 
 // -------------------------------------------------------------- the passes
 
-// Mints `value` unless it is already a placeholder, allowed, or a stand-in.
 function pairOut(cfg: Config, head: string, value: string, tail = ''): string {
   if (WHOLE_TAG.test(value) || cfg.allow.has(value) || isStandIn(value)) return head + value + tail
   return head + mint('SECRET', value) + tail
@@ -1037,7 +1036,6 @@ function scrubHeadlessKeys(text: string, cfg: Config): string {
   for (const m of text.matchAll(KEY_END)) {
     const end = m.index! + m[0].length
     const lineStart = text.lastIndexOf('\n', m.index! - 1) + 1
-    // Only quotes and spaces may sit before the marker on its own line.
     if (!/^[ \t'"`]*$/.test(text.slice(lineStart, m.index!))) continue
     let start = lineStart
     let lines = 0
@@ -1147,7 +1145,6 @@ function scrubAssignments(text: string, cfg: Config): string {
     if (shortKeyStatus(key, v)) return head + v + tail
     return pairOut(cfg, head, v, tail)
   }
-  // A value whose name sits in a sibling field.
   const sibling = (head: string, name: string, v: string, tail = ''): string => {
     if (PW_NAME.test(name)) return value(head, name, v, tail)
     if (KEY_NAME.test(name) && !/public|publishable/i.test(name) && looksSecret(v, 'key=', cfg)) return head + mint('SECRET', v) + tail
@@ -1335,7 +1332,6 @@ function parkMedia(text: string, cfg: Config): string {
   out = out.replace(BLOB, (m, offset: number, whole: string) => {
     if (cfg.allow.has(m)) return m
     if (m.includes('\n') && !evenlyWrapped(m)) return m
-    // The text before it on the same line, at most 120 characters.
     const near = whole.slice(Math.max(0, offset - 120), offset)
     const before = near.slice(near.lastIndexOf('\n') + 1)
     if (BLOB_NAME.test(before) || BLOB_INNER.test(decodeBase64Head(m)) || base64HoldsSecret(m)) return mint('SECRET', m)
@@ -1526,7 +1522,6 @@ function scrubTokens(text: string, cfg: Config): string {
 
 export function scrubSecrets(text: string, cfg: Config): string {
   if (text.length < 8) return text
-  // A whole value that is base64 (or base64url) of text holding a secret.
   if (text.length >= 256 && BASE64_VALUE.test(text) && !cfg.allow.has(text) && base64HoldsSecret(text)) return mint('SECRET', text)
   const outer = parked
   const outerLocal = local

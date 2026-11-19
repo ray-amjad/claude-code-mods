@@ -29,7 +29,6 @@ let pending = null // { name, reason, file, value, answer, isInBand, startedAt }
 // How long the box waits for the person before it gives up
 const WAIT_MS = 10 * 60_000
 
-// A .env key whose name says it holds a secret
 const SECRET_NAME = /KEY|TOKEN|SECRET|PASS|PWD|CREDENTIAL|AUTH|PRIVATE|DSN|SALT|SIGNING|WEBHOOK/i
 const ASSIGNMENT = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(.*)$/gm
 
@@ -205,7 +204,6 @@ export function isEnvFile(path) {
   return /^\.env(\.[\w.-]+)?$/.test(base) && !/\.(example|sample|template|dist)$/.test(base)
 }
 
-// The request_secret tool: what Claude reads about it
 async function registerBox($) {
   await $.tool.register({
     name: 'request_secret',
@@ -989,7 +987,6 @@ function addsEnvFile(cmd) {
   return false
 }
 
-// Why a Bash command must be blocked: it stages or commits a .env file
 async function commitBlockReason($, cmd) {
   if (addsEnvFile(cmd)) {
     return 'staging a .env file is blocked.'
@@ -1132,7 +1129,6 @@ async function gitIgnores($, cwd, file, ignore) {
   return ignore.split('\n').some(l => plain.includes(l.trim()))
 }
 
-// Plain values stay bare; anything with spaces, quotes or # gets double quotes.
 function quote(v) {
   return /^[A-Za-z0-9_\-.\/:+=@]*$/.test(v) ? v : '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"'
 }
