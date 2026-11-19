@@ -268,11 +268,16 @@ export const register: Register = on => {
     const latest = (await read($, runs)).findLast(run => run.status !== 'classifying' && run.status !== 'skipped')
     if (e.props.hasSurvey || !latest || latest.id === (await read($, dismissed))) return next(e)
 
+    // The bands of other mods draw under ours, one row fewer; one that fails must not take ours with it
+    let below = null
+    try {
+      below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - 1) } })
+    } catch {}
     const { Box, Button, Text } = $.ui.resolve(e)
     const files = latest.changes.map(change => change.name).join(', ')
     const sum = totals(latest.changes)
 
-    return (
+    const band = (
       <Box>
         <Text color={latest.status === 'failed' ? 'red' : undefined}>
           {latest.status === 'forking' && `Memory: updating (${latest.reason}) `}
@@ -286,6 +291,14 @@ export const register: Register = on => {
         <Text> </Text>
         <Button key="hide" label="Hide" onPress={() => update($, dismissed, () => latest.id)} />
       </Box>
+    )
+    return below ? (
+      <Box flexDirection="column">
+        {band}
+        {below}
+      </Box>
+    ) : (
+      band
     )
   })
 
