@@ -167,7 +167,14 @@ async function consider($: EngineInterface) {
 async function write($: EngineInterface) {
   const id = crypto.randomUUID()
   await update($, runs, list => [...list, { id, at: Date.now(), status: 'classifying', changes: [] } as Run].slice(-20))
+  try {
+    await classifyAndFork($, id)
+  } catch (err) {
+    await setRun($, id, { status: 'failed', reason: err instanceof Error ? err.message : String(err) })
+  }
+}
 
+async function classifyAndFork($: EngineInterface, id: string) {
   const dir = await memoryDir($)
   const index = await $.fs.read(`${dir}/MEMORY.md`).catch(() => '(empty)')
   const exchange = lastExchange(await $.session.messages())
