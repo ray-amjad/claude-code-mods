@@ -240,7 +240,7 @@ async function learnDotenv($, files) {
       const path = isAbsolute(f) ? f : cwd + '/' + f
       if (!(await $.fs.exists(path))) continue
       for (const m of (await $.fs.read(path)).matchAll(ASSIGNMENT)) {
-        const value = m[3].trim().replace(/^["']|["']$/g, '')
+        const value = unquote(m[3].trim())
         if (value.length >= 6 && SECRET_NAME.test(m[2])) keepSecret(value)
       }
     } catch {}
@@ -314,4 +314,11 @@ async function gitIgnores($, cwd, file, ignore) {
 
 function quote(v) {
   return /^[A-Za-z0-9_\-.\/:+=@]*$/.test(v) ? v : '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"'
+}
+
+// The value a .env line holds: quote's escapes undone in double quotes, so a
+// saved value is learned again as itself
+function unquote(v) {
+  if (/^"(?:[^"\\]|\\.)*"$/.test(v)) return v.slice(1, -1).replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c))
+  return v.replace(/^["']|["']$/g, '')
 }
