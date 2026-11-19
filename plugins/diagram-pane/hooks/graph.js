@@ -57,26 +57,33 @@ export function allIds(g, out = new Set()) {
   return out
 }
 
+// Gives each node of one level (not its subs) an id not in `taken`: a clash
+// becomes `base(id)`, then `base(id)2`, `3` ... The level's edges follow.
+function renameClashes(g, taken, base) {
+  const rename = new Map()
+  for (const n of g.nodes) {
+    if (taken.has(n.id)) {
+      const first = base(n.id)
+      let id = first
+      for (let i = 2; taken.has(id); i++) id = `${first}${i}`
+      rename.set(n.id, id)
+      n.id = id
+    }
+    taken.add(n.id)
+  }
+  for (const e of g.edges) {
+    e.from = rename.get(e.from) || e.from
+    e.to = rename.get(e.to) || e.to
+  }
+}
+
 // Mermaid ids are global, so a detail's ids must not clash with the rest of the
 // tree: clashing ones get `prefix_` in front. `taken` is the rest of the tree's ids.
 export function adoptIds(level, taken, prefix) {
   const out = clone(level)
-  const rename = new Map()
   const walk = g => {
-    for (const n of g.nodes) {
-      if (taken.has(n.id)) {
-        let id = `${cleanId(prefix)}_${n.id}`
-        for (let i = 2; taken.has(id); i++) id = `${cleanId(prefix)}_${n.id}${i}`
-        rename.set(n.id, id)
-        n.id = id
-      }
-      taken.add(n.id)
-      if (n.sub) walk(n.sub)
-    }
-    for (const e of g.edges) {
-      e.from = rename.get(e.from) || e.from
-      e.to = rename.get(e.to) || e.to
-    }
+    renameClashes(g, taken, id => `${cleanId(prefix)}_${id}`)
+    for (const n of g.nodes) if (n.sub) walk(n.sub)
   }
   walk(out)
   return out
@@ -92,21 +99,7 @@ export function uniqueIds(root) {
   while (level.length) {
     const below = []
     for (const { g, prefix } of level) {
-      const rename = new Map()
-      for (const n of g.nodes) {
-        if (taken.has(n.id)) {
-          const base = prefix ? `${cleanId(prefix)}_${n.id}` : n.id
-          let id = base
-          for (let i = 2; taken.has(id); i++) id = `${base}${i}`
-          rename.set(n.id, id)
-          n.id = id
-        }
-        taken.add(n.id)
-      }
-      for (const e of g.edges) {
-        e.from = rename.get(e.from) || e.from
-        e.to = rename.get(e.to) || e.to
-      }
+      renameClashes(g, taken, id => (prefix ? `${cleanId(prefix)}_${id}` : id))
       for (const n of g.nodes) if (n.sub) below.push({ g: n.sub, prefix: n.id })
     }
     level = below
