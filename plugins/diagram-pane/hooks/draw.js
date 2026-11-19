@@ -195,6 +195,7 @@ const BOX = {
   round: { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│', out: '┬' },
   double: { tl: '╔', tr: '╗', bl: '╚', br: '╝', h: '═', v: '║', out: '╤' },
 }
+export const corner = box => BOX[box].tl
 // A connector cell remembers which way its lines go: up, down, left, right
 const U = 1, D = 2, L = 4, R = 8
 const JOIN = { [U | D]: '│', [L | R]: '─', [D | R]: '┌', [D | L]: '┐', [U | R]: '└', [U | L]: '┘',

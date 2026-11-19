@@ -13,16 +13,27 @@
 //
 // Claude learns what the pane shows only through those two tools.
 
-import { findDiagrams, parseMermaid, drawGraph, short } from './draw.js'
+import { corner, findDiagrams, parseMermaid, drawGraph, short } from './draw.js'
 import { adoptIds, allIds, applyOps, boxOf, carrySubs, cleanId, KINDS, levelAt, OPS, setLevel, toMermaid, uniqueIds } from './graph.js'
 
 const PANE = 'diagrams'
+const openPane = ($, extra = {}) => $.ui.open({ id: PANE, title: 'Diagrams', ...extra })
+const ensurePane = async $ => {
+  if (!(await $.ui.panes()).some(p => p.id === PANE)) await openPane($)
+}
+// A message the user typed, not a tool result coming back
+const isPrompt = m => m.role === 'user' && m.text && !m.toolResults?.length
+// A pin's number, as diagram_get lists it and diagram_set's "pin:N" names it
+const pinNumber = pin => S.pins.indexOf(pin) + 1
+
 // The engine names a mod's tool mcp__<plugin name>__<tool name>
 const GET = 'diagram_get'
 const SET = 'diagram_set'
 const TOOL_GET = `mcp__diagram-pane__${GET}`
 const TOOL_SET = `mcp__diagram-pane__${SET}`
 const DEFAULT_EVERY = 3
+// Boxes 1 to KEYED get a number key in the pane
+const KEYED = 9
 const DEFAULT_MAX_PINS = 5
 const HOME = { root: 'map', path: [] }
 const NOTE = 'The map is drawn after a few turns, or now with /diagram'
@@ -78,7 +89,7 @@ export function register(on, options) {
     if (headless) return next(e)
     // Open the pane right away. Unasked, it is placed on a wide terminal (144+ columns);
     // /diagram opens it at any width.
-    await $.ui.open({ id: PANE, title: 'Diagrams' })
+    await openPane($)
     try {
       await $.command.register({ name: 'diagram', description: 'Redraw the live work map in the diagram pane', argumentHint: '[force|open]' })
     } catch (err) {
@@ -102,7 +113,7 @@ export function register(on, options) {
     if ((headless && !asked) || e.agentId || e.isAborted) return result
     const messages = await sync($)
     S.sinceMap += 1
-    if (!headless && S.pins.length && !(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: 'Diagrams' })
+    if (!headless && S.pins.length) await ensurePane($)
     S.every = Number(await $.env.get('DIAGRAM_PANE_EVERY')) || every
     if (S.sinceMap >= S.every || overdue()) {
       const work = overdue() ? catchUp($, messages) : refreshMap($, messages, false)
@@ -117,7 +128,7 @@ export function register(on, options) {
   // from scratch; /diagram open gives the pane the keyboard, so number keys work
   on('command.run', { command: 'diagram' }, async ($, e) => {
     const arg = e.args.trim()
-    await $.ui.open({ id: PANE, title: 'Diagrams', ...(arg === 'open' ? { focus: true } : {}) })
+    await openPane($, arg === 'open' ? { focus: true } : {})
     const messages = await sync($)
     if (arg === 'open') {
       await redraw($)
@@ -142,7 +153,7 @@ export function register(on, options) {
       await sync($)
       const text = setDiagram(resolveTarget(String(e.target || 'view')), e)
       await saveSaved($)
-      if (!(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: 'Diagrams' })
+      await ensurePane($)
       await redraw($)
       return { result: text }
     } catch (err) {
@@ -195,7 +206,7 @@ async function sync($) {
 
 // A turn is a prompt the user typed (tool results also arrive as user messages)
 function turnsIn(messages) {
-  return messages.filter(m => m.role === 'user' && m.text && !m.toolResults?.length).length
+  return messages.filter(isPrompt).length
 }
 
 function pinNewDiagrams(messages, maxPins) {
@@ -362,7 +373,7 @@ export function fileName(path) {
 function digest(messages) {
   const lines = []
   for (const m of messages) {
-    if (m.role === 'user' && m.text && !m.toolResults?.length) lines.push('user: ' + short(m.text.replace(/\s+/g, ' '), 160))
+    if (isPrompt(m)) lines.push('user: ' + short(m.text.replace(/\s+/g, ' '), 160))
     for (const t of m.toolUses || []) {
       const i = t.input || {}
       lines.push(`${t.tool}: ` + short(String(i.file_path || i.path || i.command || i.pattern || i.description || ''), 100))
@@ -387,7 +398,7 @@ const viewKey = view => `${view.root}\u0000${view.code || ''}\u0000${view.path.j
 // The names of the levels down to the view, for the pane's header
 function crumbs(view = S.view) {
   const pin = view.root === 'pin' ? pinOf(view.code) : null
-  const names = [pin ? short(pin.title || `pin ${S.pins.indexOf(pin) + 1}`, 24) : 'Work map']
+  const names = [pin ? short(pin.title || `pin ${pinNumber(pin)}`, 24) : 'Work map']
   let g = rootGraph(view)
   for (const id of view.path) {
     const n = g?.nodes.find(n => n.id === id)
@@ -559,7 +570,7 @@ const TOOLS = [
 export function describe() {
   normalizeView()
   const out = [`The pane shows: ${crumbs().join(' › ')}` +
-    (S.view.path.length ? `  (path ${JSON.stringify(S.view.path)} in ${S.view.root === 'map' ? '"map"' : `"pin:${S.pins.indexOf(pinOf(S.view.code)) + 1}"`})` : '')]
+    (S.view.path.length ? `  (path ${JSON.stringify(S.view.path)} in ${S.view.root === 'map' ? '"map"' : `"pin:${pinNumber(pinOf(S.view.code))}"`})` : '')]
   if (S.map) out.push(`\n## map: "${S.map.title}" (turn ${S.map.turn}${S.map.edited ? ', edited' : ''})\n\`\`\`mermaid\n${toMermaid(S.map.graph)}\n\`\`\``)
   else {
     const left = Math.max(1, S.every - S.sinceMap)
@@ -585,7 +596,7 @@ function resolveTarget(target) {
   if (target === 'map') return { ...HOME }
   const m = /^pin:?\s*(\d+)$/i.exec(target)
   if (m) {
-    const pin = S.pins[Number(m[1]) - 1]
+    const pin = S.pins[Number(m[1]) - 1] // pinNumber's inverse
     if (!pin) throw new Error(`no ${target}: there ${S.pins.length === 1 ? 'is 1 pin' : `are ${S.pins.length} pins`}`)
     return { root: 'pin', code: pin.code, path: [] }
   }
@@ -713,7 +724,7 @@ function marked(graph, keys = true) {
   return {
     nodes: graph.nodes.map((n, i) => ({
       ...n,
-      label: (keys && i < 9 ? `${i + 1}·` : '') + (n.now ? '▶ ' : '') + n.label + (n.sub ? ' ▸' : ''),
+      label: (keys && i < KEYED ? `${i + 1}·` : '') + (n.now ? '▶ ' : '') + n.label + (n.sub ? ' ▸' : ''),
     })),
     edges: graph.edges,
   }
@@ -724,7 +735,7 @@ function marked(graph, keys = true) {
 function nodeButtons(graph, act) {
   return graph.nodes.map((n, i) => ({
     key: 'node:' + n.id,
-    ...(i < 9 ? { hotkey: String(i + 1) } : {}),
+    ...(i < KEYED ? { hotkey: String(i + 1) } : {}),
     label: short(n.label, 16) + (n.sub ? ' ▸' : ''),
     onPress: () => act?.drill(n.id),
   }))
@@ -784,7 +795,7 @@ function paneItems(w, act) {
   if (S.map) {
     add(S.map.title, { bold: true })
     for (const l of drawGraph(marked(S.map.graph), w)) add(l, { color: 'cyan' })
-    add('┌ file  ╭ component  ╔ step  ▶ now  ▸ has detail', { dim: true })
+    add(KINDS.map(k => `${corner(boxOf(k))} ${k}`).join('  ') + '  ▶ now  ▸ has detail', { dim: true })
   }
   add((S.busy ? '… ' : '') + S.note, { dim: true })
   if (S.map) {
