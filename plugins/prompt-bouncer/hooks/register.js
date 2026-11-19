@@ -148,7 +148,7 @@ async function projectGate($, text, isFirst, docs) {
 
 // Read the project's docs with $.fs: plain paths, or folder/*.md for every match in one folder
 async function loadDocs($, options) {
-  const root = await $.session.cwd()
+  const root = (await $.session.root().catch(() => '')) || (await $.session.cwd())
   const max = options.maxDocChars || 20000
   const files = []
   let text = ''
