@@ -88,18 +88,22 @@ export function register(on, options) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const run = S.runs.findLast((r) => r.status !== 'tidy')
     if (e.props.hasSurvey || !run || run.id === S.hidden) return next(e)
+    // The bands of other mods draw under ours, one row fewer; one that fails must not take ours with it
+    let below = null
+    try { below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - 1) } }) } catch {}
     const { Box, Text, Button } = $.ui.resolve(e)
     const text = run.status === 'dreaming' ? 'Dream: dreaming over ' + run.before + ' memories (' + run.why + ') '
       : run.status === 'failed' ? 'Dream: failed (' + run.note + ') '
       : run.status === 'undone' ? 'Dream: undone, memory restored '
       : 'Dream: ' + summary(run) + ' '
-    return h(Box, null,
+    const band = h(Box, null,
       h(Text, { color: run.status === 'failed' ? 'red' : undefined, dimColor: run.status === 'done' }, text),
       h(Button, { key: 'open', label: 'Open', onPress: () => $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 }) }),
       h(Text, null, ' '),
       run.status === 'done' && h(Button, { key: 'undo', label: 'Undo', onPress: () => undo($, options) }),
       run.status === 'done' && h(Text, null, ' '),
       h(Button, { key: 'hide', label: 'Hide', onPress: () => { S.hidden = run.id; $.ui.invalidate('ui.render') } }))
+    return below ? h(Box, { flexDirection: 'column' }, band, below) : band
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
