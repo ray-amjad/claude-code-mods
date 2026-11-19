@@ -692,9 +692,8 @@ const key = dir => (typeof dir === 'string' ? dir : `?${dir.kind}?${dir.unresolv
 const uniq = list => [...new Map(list.map(d => [key(d), d])).values()]
 const capped = (list, raw) => (list.length > MAX_DIRS ? [{ unresolved: unquoted(raw), kind: 'cd' }] : list)
 
-// The same check the box's wait uses: every Windows sets OS=Windows_NT, in
-// Git Bash too, while the session directory's shape can't tell a Git Bash
-// /e/repo from a Linux one
+// Every Windows sets OS=Windows_NT, in Git Bash too, while the session
+// directory's shape can't tell a Git Bash /e/repo from a Linux one
 export async function isWindows($) {
   try { return (await $.env.get('OS')) === 'Windows_NT' } catch { return false }
 }

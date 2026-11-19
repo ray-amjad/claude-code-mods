@@ -46,11 +46,15 @@ const byValue = new Map<string, string>()
 const byTag = new Map<string, string>()
 let minted: Set<string> | null = null
 
-const TAG = /\[REDACTED-(?:SECRET|EMAIL|IP|LITERAL)-[0-9a-f]{8}\]/g
-const WHOLE_TAG = /^\[REDACTED-(?:SECRET|EMAIL|IP|LITERAL)-[0-9a-f]{8}\]$/
+// A placeholder is [REDACTED-<kind>-<8 hex digits>], as mint writes it.
+const KINDS: readonly Kind[] = ['SECRET', 'EMAIL', 'IP', 'LITERAL']
+const tagOf = (kinds: readonly Kind[]): string => String.raw`\[REDACTED-(?:${kinds.join('|')})-[0-9a-f]{8}\]`
+const TAG = new RegExp(tagOf(KINDS), 'g')
+const WHOLE_TAG = new RegExp(`^${tagOf(KINDS)}$`)
 
 // The placeholder of a hidden secret, for a hook that swaps them back one by one.
-export const SECRET_TAG = /\[REDACTED-SECRET-[0-9a-f]{8}\]/g
+// Global: use it with replace or matchAll, not test or exec.
+export const SECRET_TAG = new RegExp(tagOf(['SECRET']), 'g')
 // A LITERAL placeholder stands for quoted placeholder text, not for a hidden value.
 export const isLiteralTag = (tag: string): boolean => tag.startsWith('[REDACTED-LITERAL-')
 
@@ -136,7 +140,7 @@ export function collect<T>(fn: () => T): { value: T; tags: Set<string> } {
 // still comes back as its live placeholder.
 export function escapeLiteralTags(text: string): string {
   if (byTag.size === 0 || !text.includes('[REDACTED-')) return text
-  return text.replace(TAG, (t) => (byTag.has(t) && !t.startsWith('[REDACTED-LITERAL-') ? mint('LITERAL', t) : t))
+  return text.replace(TAG, (t) => (byTag.has(t) && !isLiteralTag(t) ? mint('LITERAL', t) : t))
 }
 
 // ------------------------------------------------------- known value echoes
