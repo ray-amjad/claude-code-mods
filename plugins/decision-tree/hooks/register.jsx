@@ -25,6 +25,10 @@ let transcriptPath = ''
 // Set at each session.start; true for -p / SDK sessions, where the pane is never drawn
 let headless = false
 
+// Options are lettered A, B, C ... in the pane and a, b, c ... in /explain
+const letter = i => String.fromCharCode(65 + i)
+const indexOf = ch => ch.toLowerCase().charCodeAt(0) - 97
+
 // Cheap check, no model: does the end of the reply ask something?
 // A question mark in the last paragraph, or a numbered / lettered / bulleted list of options.
 function looksLikeQuestion(answer) {
@@ -83,7 +87,7 @@ async function explore($, i, own) {
     if (i < 0) i = options.push({ label: own, mine: true }) - 1
   }
   const option = node && node.data && node.data.options && node.data.options[i]
-  if (!option) return $.ui.toast('decision-tree: no option ' + String.fromCharCode(65 + i) + ' here')
+  if (!option) return $.ui.toast('decision-tree: no option ' + letter(i) + ' here')
   path = [...path, i]
   view = 'node'
   $.ui.invalidate('ui.render')
@@ -197,7 +201,7 @@ function mapRows(node, p, prefix, rows) {
     const child = node.children[i]
     const mark = !child ? '' : child.status === 'exploring' ? '  ...' : child.status === 'failed' ? '  ✗' : '  ▸'
     rows.push({
-      text: prefix + (last ? '└ ' : '├ ') + String.fromCharCode(65 + i) + ' ' + o.label + (o.label === pick ? ' ★' : '') + (o.mine ? ' ✎' : '') + mark,
+      text: prefix + (last ? '└ ' : '├ ') + letter(i) + ' ' + o.label + (o.label === pick ? ' ★' : '') + (o.mine ? ' ✎' : '') + mark,
       path: child ? [...p, i] : null,
       kind: child ? 'explored' : 'option',
     })
@@ -300,7 +304,7 @@ export function register(on, options) {
     else if (arg === 'continue') await continueBranch($, nodeAt(path))
     else if (/^[a-h]$/.test(arg) || /^other\s+\S/.test(arg)) {
       const own = /^other\s/.test(arg) ? raw.replace(/^other\s+/i, '') : undefined
-      const work = explore($, own ? -1 : arg.charCodeAt(0) - 97, own).catch(err => $.ui.log('explore failed: ' + err))
+      const work = explore($, own ? -1 : indexOf(arg), own).catch(err => $.ui.log('explore failed: ' + err))
       if ((await $.env.get('DECISION_TREE_WAIT')) === '1') await work
     }
     $.ui.invalidate('ui.render')
@@ -320,7 +324,7 @@ export function register(on, options) {
     const crumbs = ['Question']
     let walk = root
     for (const i of path) {
-      crumbs.push(String.fromCharCode(65 + i) + ' ' + walk.children[i].label)
+      crumbs.push(letter(i) + ' ' + walk.children[i].label)
       walk = walk.children[i]
     }
     const nav = (
@@ -403,7 +407,7 @@ export function register(on, options) {
             <Box key={'opt' + i} flexDirection="column">
               <Text dimColor>{'  │'}</Text>
               <Box borderStyle={isPick ? 'bold' : 'round'} borderColor={color} paddingX={1} flexDirection="column">
-                <Text bold color={color === 'gray' ? 'white' : color}>{String.fromCharCode(65 + i) + '  ' + o.label + (isPick ? '   ★ recommended' : '') + (o.mine ? '   ✎ your answer' : '')}</Text>
+                <Text bold color={color === 'gray' ? 'white' : color}>{letter(i) + '  ' + o.label + (isPick ? '   ★ recommended' : '') + (o.mine ? '   ✎ your answer' : '')}</Text>
                 {o.detail ? <Text>{o.detail}</Text> : null}
                 {o.leadsTo ? <Text color="blue">{'→ ' + o.leadsTo}</Text> : null}
                 {(o.pros || []).map((p, j) => <Text key={'p' + j} color="green">{'+ ' + p}</Text>)}
@@ -418,7 +422,7 @@ export function register(on, options) {
           <Box flexDirection="column">
             <Text dimColor>{'  │'}</Text>
             <Box borderStyle="round" borderColor="gray" borderDimColor paddingX={1} flexDirection="column">
-              <Text dimColor bold>{String.fromCharCode(65 + data.options.length) + '  Other'}</Text>
+              <Text dimColor bold>{letter(data.options.length) + '  Other'}</Text>
               <Input key={'other.' + path.join('.')} placeholder="type your own answer" submitLabel="explore"
                 onSubmit={value => { if (value.trim()) explore($, -1, value.trim()) }} />
             </Box>
