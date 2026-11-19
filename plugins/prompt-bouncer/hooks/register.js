@@ -95,8 +95,7 @@ export function register(on, options) {
 
 // The mode: /bouncer override, then PROMPT_BOUNCER_MODE, then /config
 async function currentMode($, options) {
-  const mode = modeOverride || (await $.env.get('PROMPT_BOUNCER_MODE')) || options.mode
-  return MODES.includes(mode) ? mode : 'quick'
+  return [modeOverride, await $.env.get('PROMPT_BOUNCER_MODE'), options.mode].find((m) => MODES.includes(m)) ?? 'quick'
 }
 
 // Quick mode: no model, just patterns. Short + vague + nothing named = bounce.
