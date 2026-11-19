@@ -3,9 +3,11 @@
 // heredocs, cd and -C) and asks git which files a run would touch.
 
 // .env, .env.local, .env.production ... but not .env.example and friends
+const TEMPLATES = 'example|sample|template|dist'
+const TEMPLATE = new RegExp(`\\.(${TEMPLATES})$`)
 export function isEnvFile(path) {
   const base = String(path || '').split(/[\\/]/).pop()
-  return /^\.env(\.[\w.-]+)?$/.test(base) && !/\.(example|sample|template|dist)$/.test(base)
+  return /^\.env(\.[\w.-]+)?$/.test(base) && !TEMPLATE.test(base)
 }
 
 // git's global long options that take a value (--git-dir dir, --work-tree=dir ...)
@@ -734,7 +736,7 @@ function gitRuns(cmd, subs) {
 // in on stdin). A .env elsewhere in the command (node --env-file=.env, cat .env,
 // a second command) is not staged by the add, unless the add's arguments are
 // expanded by the shell ($f, `...`, a glob), where any .env could be what they name.
-const STAGED_ENV = /\.env\b(?!\.(example|sample|template|dist))/
+const STAGED_ENV = new RegExp(String.raw`\.env\b(?!\.(${TEMPLATES}))`)
 function addsEnvFile(cmd) {
   for (const m of cmd.matchAll(gitRunPattern('add|stage', 'g'))) {
     if (STAGED_ENV.test(m[2])) return true
