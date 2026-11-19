@@ -8,6 +8,8 @@ import {
   walk,
   collect,
   escapeLiteralTags,
+  isLiteralTag,
+  SECRET_TAG,
   type WalkState,
 } from './detect.ts'
 
@@ -24,17 +26,12 @@ import {
 // hook's 10 s budget. It is withheld rather than passed on unscanned.
 const SCAN_CAP = 16_000_000
 
-const WITHHELD =
-  'transcript-redactor could not scan this result in time, so it was withheld. Narrow the output (head, grep, offset) and retry.'
-const BLOCK_WITHHELD = '[transcript-redactor withheld this text: the scan failed]'
+// The mod running these hooks. `name` goes on every message the user sees.
+// `liveTools` are its own tools whose answer carries live placeholders, so they
+// are not turned into quoted (LITERAL) ones; the subagent tools always are.
+export type Host = { name: string; liveTools?: readonly string[] }
 
-// Tools whose answer carries live placeholders, so they are not turned into
-// quoted (LITERAL) ones: the subagent tools, whose answer holds placeholders
-// the subagent used. A mod built on this one can add its own tool here.
-export const LIVE_TAG_TOOLS = new Set(['Agent', 'Task'])
-
-// The name on the toast and the tool row. A mod built on this one sets its own.
-export const brand = { name: 'transcript-redactor' }
+const SUBAGENT_TOOLS = ['Agent', 'Task']
 
 // Attachments that carry text from outside the engine's own prose: a file,
 // a diff of a file, a queued prompt. These get the full scrub, emails too.
@@ -42,11 +39,10 @@ const OUTSIDE_TEXT = new Set(['file', 'edited_text_file', 'queued_command'])
 
 type Budget = { budget: { remainingMs: number } }
 
-// Throws before a scan that cannot finish: the `.catch` then withholds.
 function guard(text: string, next: Budget): void {
-  if (text.length > SCAN_CAP) throw new Error('transcript-redactor: text too large to scan')
+  if (text.length > SCAN_CAP) throw new Error('text too large to scan')
   const needMs = 300 + text.length / 4000
-  if (next.budget.remainingMs < needMs) throw new Error('transcript-redactor: out of time')
+  if (next.budget.remainingMs < needMs) throw new Error('out of time')
 }
 
 // A Bash command that writes text into git history or posts it to GitHub.
@@ -70,8 +66,13 @@ function looksBinary(text: string): boolean {
   return head.includes('\u0000') || (head.match(/�/g)?.length ?? 0) > 8
 }
 
-export const register: Register = (on, options) => {
+export const register: Register = (on, options) => redact(on, options, { name: 'transcript-redactor' })
+
+export function redact(on: Parameters<Register>[0], options: Parameters<Register>[1], host: Host): void {
   const cfg = makeConfig(options as Record<string, unknown>)
+  const liveTools = new Set([...SUBAGENT_TOOLS, ...(host.liveTools ?? [])])
+  const WITHHELD = `${host.name} could not scan this result in time, so it was withheld. Narrow the output (head, grep, offset) and retry.`
+  const BLOCK_WITHHELD = `[${host.name} withheld this text: the scan failed]`
 
   const scrub = (text: string): string => {
     let out = text
@@ -83,8 +84,7 @@ export const register: Register = (on, options) => {
   // An `allowUrlHosts` entry that is not a host name is said once, not dropped silently.
   let warnedHosts = cfg.allowUrlRejected.length === 0
 
-  // Counts the values hidden, not the placeholders that stand for quoted text.
-  const countHidden = (tags: Set<string>): number => [...tags].filter((t) => !t.startsWith('[REDACTED-LITERAL-')).length
+  const countHidden = (tags: Set<string>): number => [...tags].filter((t) => !isLiteralTag(t)).length
 
   // 1. What the user types. A pasted key never reaches the model as itself,
   //    and neither does the context a hook above attached to the prompt.
@@ -96,12 +96,12 @@ export const register: Register = (on, options) => {
     const n = countHidden(tags)
     if (!warnedHosts) {
       warnedHosts = true
-      $.ui.toast(`${brand.name}: allowUrlHosts ignored ${cfg.allowUrlRejected.join(', ')} (not a host name)`)
+      $.ui.toast(`${host.name}: allowUrlHosts ignored ${cfg.allowUrlRejected.join(', ')} (not a host name)`)
     }
-    if (n > 0 && cfg.notify) $.ui.toast(`${brand.name}: hid ${n} value(s) from the prompt`)
+    if (n > 0 && cfg.notify) $.ui.toast(`${host.name}: hid ${n} value(s) from the prompt`)
     if (tags.size === 0) return next(e)
     return next({ ...e, text: value.text, ...(value.context ? { context: value.context } : {}) })
-  }).catch(($, e, next) => (next.called ? next(e) : { drop: 'transcript-redactor failed to scan this prompt, so it was not sent.' }))
+  }).catch(($, e, next) => (next.called ? next(e) : { drop: `${host.name} failed to scan this prompt, so it was not sent.` }))
 
   // 2. Every tool call. On the way in, a placeholder becomes its real value,
   //    but only for a tool that runs on this machine. On the way out, the
@@ -116,7 +116,7 @@ export const register: Register = (on, options) => {
     const restoreTracked = (s: string): string =>
       restore(s) === s
         ? s
-        : s.replace(/\[REDACTED-SECRET-[0-9a-f]{8}\]/g, (t) => {
+        : s.replace(SECRET_TAG, (t) => {
             const v = restore(t)
             if (v !== t) handed.add(v)
             return v
@@ -129,7 +129,7 @@ export const register: Register = (on, options) => {
     const input = isLocal ? (walk({ ...e }, restoreTracked) as typeof e) : e
     if (e.tool === 'Bash' && [...handed].some((v) => SHELL_ACTIVE.test(v))) {
       return {
-        deny: `${brand.name}: a secret in this command holds shell characters, so its real value was not put into Bash, where it could run as code. Write it to a file with the Write tool and have the command read that file instead.`,
+        deny: `${host.name}: a secret in this command holds shell characters, so its real value was not put into Bash, where it could run as code. Write it to a file with the Write tool and have the command read that file instead.`,
       }
     }
     const r = await next(input)
@@ -140,9 +140,8 @@ export const register: Register = (on, options) => {
       return d.tags.size === 0 ? r : { deny: d.value }
     }
 
-    const escape = !LIVE_TAG_TOOLS.has(e.tool)
+    const escape = !liveTools.has(e.tool)
     const st: WalkState = { incomplete: false }
-    // The result and the text often hold the same string: scan it once.
     const memo = new Map<string, string>()
     const clean = (s: string): string => {
       const done = memo.get(s)
@@ -160,15 +159,14 @@ export const register: Register = (on, options) => {
     if (tags.size === 0) return r
     // Something was hidden, and part of the result could not be rewritten:
     // that part may hold the same secret, so the whole result is withheld.
-    if (st.incomplete) return { deny: 'transcript-redactor: a secret sits in a part of this result it cannot rewrite (too deep, or not plain data). Narrow the call and retry.' }
+    if (st.incomplete) return { deny: `${host.name}: a secret sits in a part of this result it cannot rewrite (too deep, or not plain data). Narrow the call and retry.` }
 
     const n = countHidden(tags)
-    if (cfg.notify && n > 0) $.ui.notice(e.tool_use_id, `${brand.name}: hid ${n} value(s)`)
+    if (cfg.notify && n > 0) $.ui.notice(e.tool_use_id, `${host.name}: hid ${n} value(s)`)
     const context = value.context ? { context: value.context } : {}
     if (r.isError) return { isError: true as const, result: value.result, text: value.text, ...context }
     return { result: value.result, ...context } as typeof r
   }).catch(async ($, e, next) => {
-    // Nothing ran yet: refuse the call. The tool answered: withhold it.
     if (!next.called) return { deny: WITHHELD }
     const r = await next(e)
     if (r.deny !== undefined) return { deny: WITHHELD }
@@ -227,14 +225,14 @@ export const register: Register = (on, options) => {
       // but unreadable (too large, say) cannot be checked, so it is refused.
       if (!(await $.fs.exists(e.path))) return next(e)
       if (MEDIA_FILE.test(e.path)) return next(e)
-      return { deny: 'transcript-redactor: could not check this file for secrets; ask Claude to Read it instead' }
+      return { deny: `${host.name}: could not check this file for secrets; ask Claude to Read it instead` }
     }
     if (looksBinary(text)) return next(e)
     guard(text, next)
     const { tags } = collect(() => scrubSecrets(text, cfg))
-    if (tags.size > 0) return { deny: 'transcript-redactor: this file holds a secret; ask Claude to Read it instead, so the value is replaced by a placeholder' }
+    if (tags.size > 0) return { deny: `${host.name}: this file holds a secret; ask Claude to Read it instead, so the value is replaced by a placeholder` }
     return next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'transcript-redactor: could not check this file for secrets' }))
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: `${host.name}: could not check this file for secrets` }))
 
   // 6. A subagent's task. The model only ever holds placeholders, and the
   //    Agent tool gets no restore, so this is a second layer: a value that
@@ -247,11 +245,11 @@ export const register: Register = (on, options) => {
       guard(e.prompt, next)
       const { tags } = collect(() => secretsOnly(e.prompt))
       if (tags.size === 0) return next(e)
-      return { deny: "transcript-redactor: this workflow agent's prompt holds a secret, and a workflow prompt cannot be rewritten. Pass the value by a file or an env var instead." }
+      return { deny: `${host.name}: this workflow agent's prompt holds a secret, and a workflow prompt cannot be rewritten. Pass the value by a file or an env var instead.` }
     }
     guard(e.prompt, next)
     const prompt = secretsOnly(e.prompt)
     const description = secretsOnly(e.description)
     return prompt === e.prompt && description === e.description ? next(e) : next({ ...e, prompt, description })
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'transcript-redactor failed to scan this task, so the subagent was not started.' }))
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: `${host.name} failed to scan this task, so the subagent was not started.` }))
 }
