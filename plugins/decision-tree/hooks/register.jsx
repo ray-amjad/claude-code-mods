@@ -28,6 +28,8 @@ let headless = false
 // Options are lettered A, B, C ... in the pane and a, b, c ... in /explain
 const letter = i => String.fromCharCode(65 + i)
 const indexOf = ch => ch.toLowerCase().charCodeAt(0) - 97
+// A -p run (a test, a script) asks to wait for the work a hook starts
+const waitAsked = async $ => (await $.env.get('DECISION_TREE_WAIT')) === '1'
 
 // Cheap check, no model: does the end of the reply ask something?
 // A question mark in the last paragraph, or a numbered / lettered / bulleted list of options.
@@ -87,7 +89,7 @@ async function explore($, i, own) {
     if (i < 0) i = options.push({ label: own, mine: true }) - 1
   }
   const option = node && node.data && node.data.options && node.data.options[i]
-  if (!option) return $.ui.toast('decision-tree: no option ' + letter(i) + ' here')
+  if (!option) return $.ui.toast(i < 0 ? 'decision-tree: no question here to add an answer to' : 'decision-tree: no option ' + letter(i) + ' here')
   path = [...path, i]
   view = 'node'
   $.ui.invalidate('ui.render')
@@ -280,7 +282,7 @@ export function register(on, options) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     // Headless: nothing would be shown, so skip the gate and the fork, unless DECISION_TREE_WAIT asks for it
-    const wait = (await $.env.get('DECISION_TREE_WAIT')) === '1'
+    const wait = await waitAsked($)
     if (headless && !wait) return result
     // A branch's own claude -p run never explains its own replies
     if ((await $.env.get('DECISION_TREE_CHILD')) === '1') return result
@@ -304,7 +306,7 @@ export function register(on, options) {
     else if (/^[a-h]$/.test(arg) || /^other\s+\S/.test(arg)) {
       const own = /^other\s/.test(arg) ? raw.replace(/^other\s+/i, '') : undefined
       const work = explore($, own ? -1 : indexOf(arg), own).catch(err => $.ui.log('explore failed: ' + err))
-      if ((await $.env.get('DECISION_TREE_WAIT')) === '1') await work
+      if (await waitAsked($)) await work
     }
     $.ui.invalidate('ui.render')
     await openPane($, true)
