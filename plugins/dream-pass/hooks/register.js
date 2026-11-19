@@ -68,7 +68,7 @@ export function register(on, options) {
   on('command.run', { command: 'dream' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'where') $.ui.toast('memory folder: ' + (await memoryDir($, options)))
-    else if (arg === 'undo') await undo($, options)
+    else if (arg === 'undo') await startUndo($, options)
     else if (arg === 'show') await $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 })
     else {
       await launch($, dream($, options, '/dream'))
@@ -102,7 +102,7 @@ export function register(on, options) {
       h(Text, { color: run.status === 'failed' ? 'red' : undefined, dimColor: run.status === 'done' }, text),
       h(Button, { key: 'open', label: 'Open', onPress: () => $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 }) }),
       h(Text, null, ' '),
-      run.status === 'done' && h(Button, { key: 'undo', label: 'Undo', onPress: () => undo($, options) }),
+      run.status === 'done' && h(Button, { key: 'undo', label: 'Undo', onPress: () => startUndo($, options) }),
       run.status === 'done' && h(Text, null, ' '),
       h(Button, { key: 'hide', label: 'Hide', onPress: () => { S.hidden = run.id; $.ui.invalidate('ui.render') } }))
     return below ? h(Box, { flexDirection: 'column' }, band, below) : band
@@ -301,17 +301,24 @@ export function parsePlan(text, files) {
   let json
   try { json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) } catch { return null }
   const ok = (n) => safeName(n) && n !== 'MEMORY.md'
+  // apply runs merges first, each deleting its sources: a merge that touches a file an
+  // earlier merge touched, or a later edit of a merged file, would undo that merge
+  const inMerge = new Set()
   const merged = (json.merged || []).filter((m) => ok(m.into) && typeof m.content === 'string')
     .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) }))
     // A merge with no source left would overwrite `into` and record no change
     .filter((m) => m.from.length > 0)
-  // apply runs merges first: a later rewrite or removal of a merged file would undo the merge
-  const inMerge = new Set(merged.flatMap((m) => [m.into, ...m.from]))
+    .filter((m) => {
+      const touched = [m.into, ...m.from]
+      if (touched.some((f) => inMerge.has(f))) return false
+      touched.forEach((f) => inMerge.add(f))
+      return true
+    })
   return {
     merged,
     rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && !inMerge.has(w.file) && typeof w.content === 'string'),
     removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files && !inMerge.has(d.file)),
-    added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && typeof a.content === 'string'),
+    added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && !inMerge.has(a.file) && typeof a.content === 'string'),
     index: typeof json.index === 'string' && json.index.trim() ? json.index.trim() + '\n' : null,
   }
 }
@@ -371,6 +378,12 @@ export function dropDeadPointers(index, files) {
 }
 
 // Put the newest backup back: its files return, files it didn't have go away
+// Undo from the command or the band: a failure is said, never left unhandled
+const startUndo = ($, options) => undo($, options).catch((err) => {
+  $.ui.log('undo failed: ' + err.message)
+  $.ui.toast('dream undo failed, memory may be half restored: ' + err.message)
+})
+
 async function undo($, options) {
   const dir = await memoryDir($, options)
   const root = dir + '/.dream-backup'
