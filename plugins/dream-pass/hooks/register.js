@@ -377,13 +377,13 @@ export function dropDeadPointers(index, files) {
   }).join('\n')
 }
 
-// Put the newest backup back: its files return, files it didn't have go away
 // Undo from the command or the band: a failure is said, never left unhandled
 const startUndo = ($, options) => undo($, options).catch((err) => {
   $.ui.log('undo failed: ' + err.message)
   $.ui.toast('dream undo failed, memory may be half restored: ' + err.message)
 })
 
+// Put the newest backup back: its files return, files it didn't have go away
 async function undo($, options) {
   const dir = await memoryDir($, options)
   const root = dir + '/.dream-backup'
