@@ -17,20 +17,24 @@ import { findDiagrams, parseMermaid, drawGraph, short } from './draw.js'
 import { adoptIds, allIds, applyOps, boxOf, carrySubs, cleanId, levelAt, setLevel, toMermaid, uniqueIds } from './graph.js'
 
 const PANE = 'diagrams'
-const TOOL_GET = 'mcp__diagram-pane__diagram_get'
-const TOOL_SET = 'mcp__diagram-pane__diagram_set'
+// The engine names a mod's tool mcp__<plugin name>__<tool name>
+const GET = 'diagram_get'
+const SET = 'diagram_set'
+const TOOL_GET = `mcp__diagram-pane__${GET}`
+const TOOL_SET = `mcp__diagram-pane__${SET}`
+const DEFAULT_EVERY = 3
+const DEFAULT_MAX_PINS = 5
 const HOME = { root: 'map', path: [] }
 const NOTE = 'The map is drawn after a few turns, or now with /diagram'
 // Set at each session.start; true for -p / SDK sessions
 let headless = false
 
-// Everything the pane shows. Pins are rebuilt from the transcript; the map, the
-// edited pins and the view are also saved in $.store.
-const S = {
+// What belongs to one session id: its map, pins and view. Pins are rebuilt from
+// the transcript; the map, the edited pins and the view are also saved in $.store.
+const sessionState = () => ({
   pins: [],          // [{ kind, code, title, graph, turn, edited }], newest first
   seen: new Set(),   // the code of every diagram pinned so far, to skip repeats
   scanned: 0,        // how many transcript messages we already looked at
-  turn: 0,           // prompts the user has sent in this session
   sinceMap: 0,       // turns since the gate last ran
   map: null,         // { title, graph, turn, edited } from the last fork or edit
   mapAt: 0,          // transcript length when the map was drawn
@@ -39,9 +43,15 @@ const S = {
   loading: new Set(),// views whose detail a fork is drawing
   loaded: false,     // the saved map has been read
   caughtUp: false,   // the one early map draw for a session with work but no map was tried
-  maxPins: 5,
-  every: 3,          // turns between map checks (everyTurns, or DIAGRAM_PANE_EVERY)
   note: NOTE,
+})
+
+// Everything the pane shows. The fields after the session's own outlive a /clear.
+const S = {
+  ...sessionState(),
+  turn: 0,           // prompts the user has sent in this process
+  maxPins: DEFAULT_MAX_PINS,
+  every: DEFAULT_EVERY, // turns between map checks (everyTurns, or DIAGRAM_PANE_EVERY)
   busy: false,       // a gate or fork is running
   sessionId: null,   // the session the state above belongs to
   gen: 0,            // bumped when a new session starts, so late forks drop their reply
@@ -51,24 +61,19 @@ const S = {
 // /clear keeps the process (session.start does not fire) but starts a new
 // session id: drop the old session's map, pins and view
 function startSession(id) {
-  if (S.sessionId !== null && S.sessionId !== id) {
-    Object.assign(S, {
-      pins: [], seen: new Set(), scanned: 0, sinceMap: 0, map: null, mapAt: 0,
-      edits: {}, view: HOME, loading: new Set(), loaded: false, caughtUp: false, note: NOTE, gen: S.gen + 1,
-    })
-  }
+  if (S.sessionId !== null && S.sessionId !== id) Object.assign(S, sessionState(), { gen: S.gen + 1 })
   const changed = S.sessionId !== id
   S.sessionId = id
   return changed
 }
 
 export function register(on, options) {
-  const every = Number(options?.everyTurns) || 3
+  const every = Number(options?.everyTurns) || DEFAULT_EVERY
   S.every = every
-  S.maxPins = Number(options?.maxPins) || 5
+  S.maxPins = Number(options?.maxPins) || DEFAULT_MAX_PINS
 
   on('session.start', async ($, e, next) => {
-    // Set at each session.start. In -p / SDK sessions there is no pane to draw into
+    // In -p / SDK sessions there is no pane to draw into
     headless = e.isInteractive === false
     if (headless) return next(e)
     // Open the pane right away. Unasked, it is placed on a wide terminal (144+ columns);
@@ -274,17 +279,8 @@ async function refreshMap($, messages, force) {
     const edits = S.mapEdits
     S.note = 'fork: drawing the work map...'
     await redraw($)
-    const r = await $.model.fork({ prompt: FORK_PROMPT + (base ? basePrompt(base) : '') })
-    if (gen !== S.gen) return // /clear ran meanwhile: this map is the old session's
-    if (!r.isAnswered) {
-      S.note = r.reason === 'nothing-to-fork' ? 'nothing to map yet: send a prompt first' : 'fork failed: ' + r.reason
-      return
-    }
-    const map = parseMap(r.text)
-    if (!map) {
-      S.note = 'fork reply was not a graph: ' + short(r.text.replace(/\s+/g, ' '), 60)
-      return
-    }
+    const map = await forkGraph($, FORK_PROMPT + (base ? basePrompt(base) : ''), gen, 'map')
+    if (!map) return
     // Someone changed the map while the fork ran: their change wins over a map
     // drawn from what was there before it
     if (S.mapEdits !== edits) {
@@ -471,17 +467,8 @@ async function expand($, view) {
   await redraw($)
   const gen = S.gen
   try {
-    const r = await $.model.fork({ prompt: DETAIL_PROMPT(crumbs(parentView).join(' › '), parent, node) })
-    if (gen !== S.gen) return
-    if (!r.isAnswered) {
-      S.note = r.reason === 'nothing-to-fork' ? 'nothing to fork yet: send a prompt first' : 'fork failed: ' + r.reason
-      return
-    }
-    const detail = parseMap(r.text)
-    if (!detail) {
-      S.note = 'fork reply was not a graph: ' + short(r.text.replace(/\s+/g, ' '), 60)
-      return
-    }
+    const detail = await forkGraph($, DETAIL_PROMPT(crumbs(parentView).join(' › '), parent, node), gen)
+    if (!detail) return
     // The diagram may have changed while the fork ran: attach only to a box that
     // is still there and still has no detail
     const root = rootGraph(view)
@@ -502,9 +489,29 @@ async function expand($, view) {
 // Changing a diagram: Claude's tools and the pane's own input
 // ---------------------------------------------------------------------------
 
+// A fork of the session asked `prompt`. Null when the reply is the old session's
+// (a /clear ran since `gen`) or there is none; the pane's note then says why.
+async function askFork($, prompt, gen, what = 'fork') {
+  const r = await $.model.fork({ prompt })
+  if (gen !== S.gen) return null
+  if (!r.isAnswered) {
+    S.note = r.reason === 'nothing-to-fork' ? `nothing to ${what} yet: send a prompt first` : 'fork failed: ' + r.reason
+    return null
+  }
+  return r.text
+}
+
+async function forkGraph($, prompt, gen, what) {
+  const text = await askFork($, prompt, gen, what)
+  if (text === null) return null
+  const graph = parseMap(text)
+  if (!graph) S.note = 'fork reply was not a graph: ' + short(text.replace(/\s+/g, ' '), 60)
+  return graph
+}
+
 const TOOLS = [
   {
-    name: 'diagram_get',
+    name: GET,
     description:
       "Read what the user's diagram side pane shows: the live work map, the diagrams pinned from your replies, and which box " +
       'the user has opened. Each comes back as mermaid with stable node ids; a subgraph is a box with a detail diagram inside ' +
@@ -514,7 +521,7 @@ const TOOLS = [
     isDeferred: false,
   },
   {
-    name: 'diagram_set',
+    name: SET,
     description:
       "Change a diagram in the user's side pane. target: \"view\" (what the user is looking at; the default), \"map\" " +
       '(the live work map) or "pin:N" (a pinned diagram, N as diagram_get lists it). path: node ids to go down through ' +
@@ -682,18 +689,14 @@ async function editByFork($, text) {
   await redraw($)
   const gen = S.gen
   try {
-    const r = await $.model.fork({ prompt: EDIT_PROMPT(crumbs(view).join(' › '), source, text) })
-    if (gen !== S.gen) return
-    if (!r.isAnswered) {
-      S.note = r.reason === 'nothing-to-fork' ? 'nothing to fork yet: send a prompt first' : 'fork failed: ' + r.reason
-      return
-    }
+    const reply = await askFork($, EDIT_PROMPT(crumbs(view).join(' › '), source, text), gen)
+    if (reply === null) return
     // The chart is in a code fence, or starts at a line of its own that opens with
     // flowchart or graph (never at those words inside the prose before it)
-    const fenced = r.text.match(/```(?:mermaid)?\s*\n([\s\S]*?)```/)
-    const start = r.text.search(/^[ \t]*(flowchart|graph)\b/m)
+    const fenced = reply.match(/```(?:mermaid)?\s*\n([\s\S]*?)```/)
+    const start = reply.search(/^[ \t]*(flowchart|graph)\b/m)
     if (!fenced && start < 0) throw new Error('the reply had no flowchart')
-    const code = fenced ? fenced[1] : r.text.slice(start)
+    const code = fenced ? fenced[1] : reply.slice(start)
     setDiagram({ ...view, path: [] }, { path: view.path, mermaid: code })
     S.note = `changed: ${short(text, 40)}`
     await saveSaved($)
