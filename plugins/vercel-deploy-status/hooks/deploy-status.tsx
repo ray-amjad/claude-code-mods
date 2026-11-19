@@ -201,6 +201,8 @@ export const register: Register = (on, options) => {
           active = await poll()
           $.ui.invalidate('ui.render')
         } while (again)
+      } catch (err) {
+        $.ui.log('vercel-deploy-status: poll failed: ' + (err instanceof Error ? err.message : String(err)))
       } finally {
         polling = false
         // A poll that throws must not end the loop for the session
