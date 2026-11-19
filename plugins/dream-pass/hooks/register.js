@@ -21,6 +21,8 @@ const LINK = /\]\(([^)]+\.md)\)/
 // The index's own limits: a line or line count past these is a problem the code finds for free
 const INDEX_MAX_LINES = 200
 const INDEX_MAX_CHARS = 200
+// The dream writes the index tighter than that, so a few later additions don't trip the check
+const INDEX_TARGET_CHARS = 150
 
 const S = {
   runs: [],        // newest last: { id, at, why, status, before, after, changes, stamp, note }
@@ -230,6 +232,9 @@ async function dream($, options, why) {
     finish($, run, { status: 'done', changes, stamp, after: count(await readMemory($, dir)) })
     $.ui.toast('dreamed: ' + summary(run), { timeoutMs: 8000 })
     $.ui.log('dreamed: ' + summary(run) + ' (' + why + '), checked ' + run.checked + ' sources and ' + run.sessions + ' recent sessions, backup in .dream-backup/' + stamp)
+  } catch (err) {
+    finish($, run, { status: 'failed', note: err.message })
+    throw err
   } finally {
     S.busy = false
     $.ui.invalidate('ui.render')
@@ -264,7 +269,7 @@ Make these edits, and only where they are clearly right:
 - ADD a memory only for a preference, correction or fact the user stated at least twice (in two
   sessions, or in a session and this conversation) that no file covers yet.
 - Rewrite MEMORY.md: one line per surviving memory, "- [Title](file.md) - hook", each line under
-  150 characters, under 200 lines, grouped under the existing headings, every file listed once.
+  ${INDEX_TARGET_CHARS} characters, under ${INDEX_MAX_LINES} lines, grouped under the existing headings, every file listed once.
 Rules:
 - When two memories disagree, check the sources: the later, explicit statement wins. If the
   sources don't settle it, keep both and add "contradicts <file>, verify which is current".
