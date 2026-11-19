@@ -31,7 +31,10 @@ let pending = null // { name, reason, file, value, answer, isInBand, startedAt }
 const WAIT_MS = 10 * 60_000
 
 const SECRET_NAME = /KEY|TOKEN|SECRET|PASS|PWD|CREDENTIAL|AUTH|PRIVATE|DSN|SALT|SIGNING|WEBHOOK/i
-const ASSIGNMENT = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(.*)$/gm
+// NAME=, export NAME= or NAME = : the head of a .env line, read and rewritten the same way
+const ASSIGNMENT_HEAD = String.raw`(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)`
+const ASSIGNMENT = new RegExp(`^${ASSIGNMENT_HEAD}(.*)$`, 'gm')
+const HEAD = new RegExp(`^${ASSIGNMENT_HEAD}`)
 
 export function register(on, options) {
   // request_secret answers with a live placeholder: keep it live
@@ -295,8 +298,8 @@ async function saveToDotenv($, cwd, file, name, value) {
   const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const line = `${name}=${quote(value)}`
   const lines = old.split('\n').filter((l, i, all) => !(i === all.length - 1 && l === ''))
-  const at = lines.findIndex(l => l.startsWith(name + '='))
-  if (at >= 0) lines[at] = line
+  const at = lines.findIndex(l => HEAD.exec(l)?.[2] === name)
+  if (at >= 0) lines[at] = (/^\s*export\s/.test(lines[at]) ? 'export ' : '') + line
   else lines.push(line)
   await $.fs.write(path, lines.join('\n') + '\n')
   return path + (isIgnored ? '' : ` (and added ${file} to ${gi})`)
