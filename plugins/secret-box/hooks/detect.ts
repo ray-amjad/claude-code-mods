@@ -38,17 +38,21 @@ export type Config = {
 // its real value in these: a tool that hands its input to another model or to
 // the network (Agent, WebFetch, WebSearch, SendMessage, an MCP tool) gets the
 // placeholder as written.
-export const DEFAULT_RESTORE_TOOLS = 'Bash,Write,Edit,MultiEdit,NotebookEdit'
+const DEFAULT_RESTORE_TOOLS = 'Bash,Write,Edit,MultiEdit,NotebookEdit'
 
 // ---------------------------------------------------------------- the vault
 
 const byValue = new Map<string, string>()
 const byTag = new Map<string, string>()
-let hidden = 0
 let minted: Set<string> | null = null
 
 const TAG = /\[REDACTED-(?:SECRET|EMAIL|IP|LITERAL)-[0-9a-f]{8}\]/g
 const WHOLE_TAG = /^\[REDACTED-(?:SECRET|EMAIL|IP|LITERAL)-[0-9a-f]{8}\]$/
+
+// The placeholder of a hidden secret, for a hook that swaps them back one by one.
+export const SECRET_TAG = /\[REDACTED-SECRET-[0-9a-f]{8}\]/g
+// A LITERAL placeholder stands for quoted placeholder text, not for a hidden value.
+export const isLiteralTag = (tag: string): boolean => tag.startsWith('[REDACTED-LITERAL-')
 
 function randomHex8(): string {
   const bytes = new Uint8Array(4)
@@ -62,7 +66,6 @@ function randomHex8(): string {
 // holds a placeholder from an earlier pass (a key inside a URL password) is
 // stored with that placeholder put back, so one restore gives the real text.
 export function mint(kind: Kind, raw: string): string {
-  hidden++
   const value = kind === 'LITERAL' ? raw : restore(unpark(raw))
   const seen = byValue.get(value)
   if (seen) {
@@ -109,12 +112,6 @@ export function keepSecret(value: string): string {
     echoIndex = null
   }
   return tag
-}
-
-// How many times a value has been hidden this session. A hook reads it before
-// and after a scrub to learn whether anything changed.
-export function hiddenCount(): number {
-  return hidden
 }
 
 // Runs `fn` and hands back every placeholder it minted or reused, so a hook
