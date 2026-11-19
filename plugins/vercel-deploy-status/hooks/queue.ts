@@ -101,7 +101,7 @@ export function parseList(stdout: string): Deployment[] {
 
 export function header(project: string, rows: Row[]): string {
   const queued = rows.filter((r) => r.d.state === 'QUEUED').length
-  const building = rows.filter((r) => r.d.state !== 'QUEUED' && IN_FLIGHT.has(r.d.state)).length
+  const building = rows.filter((r) => IN_FLIGHT.has(r.d.state)).length - queued
   const done = rows.length - queued - building
   const counts = [
     building > 0 ? `${building} building` : '',
