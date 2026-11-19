@@ -60,18 +60,38 @@ export function parseSkillMd(text: string, fallbackName: string): Skill | null {
 
 // The engine's skill listing: `- name: description` per skill, a description
 // sometimes running on over following lines. Plugin skills carry `plugin:`.
+type ListingLine = { entry: { name: string; description: string } } | { runOn: string } | { other: true }
+
+function listingLine(line: string): ListingLine {
+  const entry = line.match(/^- (\S+?)(?:: (.*))?$/)
+  if (entry?.[1]) return { entry: { name: entry[1].replace(/:$/, ''), description: entry[2] ?? '' } }
+  if (line.trim() && !line.startsWith('The following')) return { runOn: line.trim() }
+  return { other: true }
+}
+
 export function parseListing(text: string): Skill[] {
   const skills: Skill[] = []
   for (const line of text.split('\n')) {
-    const entry = line.match(/^- (\S+?)(?:: (.*))?$/)
+    const parsed = listingLine(line)
     const last = skills[skills.length - 1]
-    if (entry?.[1]) {
-      skills.push({ name: entry[1].replace(/:$/, ''), description: entry[2] ?? '', body: '' })
-    } else if (last && line.trim() && !line.startsWith('The following')) {
-      last.description += ` ${line.trim()}`
-    }
+    if ('entry' in parsed) skills.push({ ...parsed.entry, body: '' })
+    else if ('runOn' in parsed && last) last.description += ` ${parsed.runOn}`
   }
   return skills
+}
+
+// The listing without the skills named in `off`, run-on description lines included
+export function dropFromListing(text: string, off: ReadonlySet<string>): string {
+  let dropping = false
+  return text
+    .split('\n')
+    .filter(line => {
+      const parsed = listingLine(line)
+      if ('entry' in parsed) dropping = off.has(parsed.entry.name)
+      else if ('other' in parsed) return true
+      return !dropping
+    })
+    .join('\n')
 }
 
 // Disk skills bring their SKILL.md body; the listing brings the plugin and
@@ -314,14 +334,7 @@ export const register: Register = (on, options) => {
     if (current !== 'observe') return { text: null }
     const off = new Set(await read($, disabled))
     if (off.size === 0) return next(e)
-    const kept = e.text
-      .split('\n')
-      .filter(line => {
-        const entry = line.match(/^- (\S+?)(?::|$)/)
-        return !entry?.[1] || !off.has(entry[1])
-      })
-      .join('\n')
-    return next({ ...e, text: kept })
+    return next({ ...e, text: dropFromListing(e.text, off) })
   })
 
   // The model's own skill loads: blocked outright, held to the steer pick,
