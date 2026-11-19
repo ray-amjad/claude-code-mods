@@ -298,7 +298,9 @@ export function parsePlan(text, files) {
   const ok = (n) => safeName(n) && n !== 'MEMORY.md'
   return {
     merged: (json.merged || []).filter((m) => ok(m.into) && typeof m.content === 'string')
-      .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) })),
+      .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) }))
+      // A merge with no source left would overwrite `into` and record no change
+      .filter((m) => m.from.length > 0),
     rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && typeof w.content === 'string'),
     removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files),
     added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && typeof a.content === 'string'),
