@@ -79,6 +79,9 @@ async function explainRoot($, answer) {
 
 // Explore option i of the node the pane shows: fork the real session at that node's
 // question, tell the fork we picked i, and let it play that out with read-only tools.
+// Explore from a command or the pane: a failure is logged, never left unhandled
+const startExplore = ($, i, own) => explore($, i, own).catch(err => $.ui.log('explore failed: ' + err))
+
 // With own, the answer is yours: it joins the question's options first, then is explored
 async function explore($, i, own) {
   const tree = root
@@ -99,7 +102,7 @@ async function explore($, i, own) {
   node.children[i] = child
 
   // The message to cut the parent session at: the reply that asked this question
-  if (!node.msgId) node.msgId = await lastAssistantId($, node.sid, node.answer)
+  if (!node.msgId) node.msgId = await lastAssistantId($, node.sid, node.answer).catch(() => null)
   if (!node.msgId) $.ui.log('decision-tree: message id not found, forking from the latest point')
   const args = ['claude', '-p', whatIf(option),
     '--resume', node.sid, '--fork-session', '--output-format', 'json',
@@ -306,7 +309,7 @@ export function register(on, options) {
     else if (arg === 'continue') await continueBranch($, nodeAt(path))
     else if (/^[a-h]$/.test(arg) || /^other\s+\S/.test(arg)) {
       const own = /^other\s/.test(arg) ? raw.replace(/^other\s+/i, '') : undefined
-      const work = explore($, own ? -1 : indexOf(arg), own).catch(err => $.ui.log('explore failed: ' + err))
+      const work = startExplore($, own ? -1 : indexOf(arg), own)
       if (await waitAsked($)) await work
     }
     $.ui.invalidate('ui.render')
@@ -415,7 +418,7 @@ export function register(on, options) {
                 {(o.pros || []).map((p, j) => <Text key={'p' + j} color="green">{'+ ' + p}</Text>)}
                 {(o.cons || []).map((c, j) => <Text key={'c' + j} color="red">{'- ' + c}</Text>)}
                 <Button key={'x' + i} label={child ? (child.status === 'exploring' ? 'Exploring...' : 'Open branch ▸') : 'Explore ▸'}
-                  onPress={() => explore($, i)} />
+                  onPress={() => startExplore($, i)} />
               </Box>
             </Box>
           )
@@ -426,7 +429,7 @@ export function register(on, options) {
             <Box borderStyle="round" borderColor="gray" borderDimColor paddingX={1} flexDirection="column">
               <Text dimColor bold>{letter(data.options.length) + '  Other'}</Text>
               <Input key={'other.' + path.join('.')} placeholder="type your own answer" submitLabel="explore"
-                onSubmit={value => { if (value.trim()) explore($, -1, value.trim()) }} />
+                onSubmit={value => { if (value.trim()) startExplore($, -1, value.trim()) }} />
             </Box>
           </Box>
         ) : null}
