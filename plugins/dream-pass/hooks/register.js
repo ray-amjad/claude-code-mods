@@ -307,13 +307,16 @@ export function parsePlan(text, files) {
   let json
   try { json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) } catch { return null }
   const ok = (n) => safeName(n) && n !== 'MEMORY.md'
+  const merged = (json.merged || []).filter((m) => ok(m.into) && typeof m.content === 'string')
+    .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) }))
+    // A merge with no source left would overwrite `into` and record no change
+    .filter((m) => m.from.length > 0)
+  // apply runs merges first: a later rewrite or removal of a merged file would undo the merge
+  const inMerge = new Set(merged.flatMap((m) => [m.into, ...m.from]))
   return {
-    merged: (json.merged || []).filter((m) => ok(m.into) && typeof m.content === 'string')
-      .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) }))
-      // A merge with no source left would overwrite `into` and record no change
-      .filter((m) => m.from.length > 0),
-    rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && typeof w.content === 'string'),
-    removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files),
+    merged,
+    rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && !inMerge.has(w.file) && typeof w.content === 'string'),
+    removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files && !inMerge.has(d.file)),
     // New memories only: an "added" file that already exists is ignored
     added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && typeof a.content === 'string'),
     index: typeof json.index === 'string' && json.index.trim() ? json.index.trim() + '\n' : null,
@@ -391,11 +394,12 @@ async function undo($, options) {
   for (const [name, text] of Object.entries(saved)) await $.fs.write(dir + '/' + name, text)
   // Retire the used backup, so a second undo goes one dream further back
   const [from, to] = [root + '/' + stamp, root + '/undone-' + stamp]
-  await runJob($, 'rename', from, to)
+  const retired = (await runJob($, 'rename', from, to)).exitCode === 0
+  const note = 'restored the backup from ' + stamp + (retired ? '' : ', but could not retire it: the next undo restores it again')
   const run = S.runs.findLast((r) => r.stamp === stamp)
-  if (run) finish($, run, { status: 'undone', note: 'restored the backup from ' + stamp })
-  else addRun($, { why: 'undo', status: 'undone', note: 'restored the backup from ' + stamp })
-  $.ui.toast('restored the memory from ' + stamp)
+  if (run) finish($, run, { status: 'undone', note })
+  else addRun($, { why: 'undo', status: 'undone', note })
+  $.ui.toast(retired ? 'restored the memory from ' + stamp : 'restored the memory from ' + stamp + ', but the backup could not be retired')
 }
 
 // ---------- evidence from past sessions ----------
