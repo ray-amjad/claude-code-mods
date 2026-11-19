@@ -12,7 +12,8 @@
 //
 // Nothing is written to disk. The vault dies with the session.
 
-export type Kind = 'SECRET' | 'EMAIL' | 'IP' | 'LITERAL'
+const KINDS = ['SECRET', 'EMAIL', 'IP', 'LITERAL'] as const
+export type Kind = (typeof KINDS)[number]
 
 export type Config = {
   secrets: boolean
@@ -47,7 +48,6 @@ const byTag = new Map<string, string>()
 let minted: Set<string> | null = null
 
 // A placeholder is [REDACTED-<kind>-<8 hex digits>], as mint writes it.
-const KINDS: readonly Kind[] = ['SECRET', 'EMAIL', 'IP', 'LITERAL']
 const tagOf = (kinds: readonly Kind[]): string => String.raw`\[REDACTED-(?:${kinds.join('|')})-[0-9a-f]{8}\]`
 const TAG = new RegExp(tagOf(KINDS), 'g')
 const WHOLE_TAG = new RegExp(`^${tagOf(KINDS)}$`)
