@@ -21,6 +21,8 @@ const openPane = ($, extra = {}) => $.ui.open({ id: PANE, title: 'Diagrams', ...
 const ensurePane = async $ => {
   if (!(await $.ui.panes()).some(p => p.id === PANE)) await openPane($)
 }
+// A -p run (a test) asks to wait for the work a hook starts
+const syncAsked = async $ => Boolean(await $.env.get('DIAGRAM_PANE_SYNC'))
 // A message the user typed, not a tool result coming back
 const isPrompt = m => m.role === 'user' && m.text && !m.toolResults?.length
 // A pin's number, as diagram_get lists it and diagram_set's "pin:N" names it
@@ -109,7 +111,7 @@ export function register(on, options) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     // Headless: no pane, so skip, unless DIAGRAM_PANE_SYNC or DIAGRAM_PANE_DUMP asks for the work
-    const asked = (await $.env.get('DIAGRAM_PANE_SYNC')) || (await $.env.get('DIAGRAM_PANE_DUMP'))
+    const asked = (await syncAsked($)) || (await $.env.get('DIAGRAM_PANE_DUMP'))
     if ((headless && !asked) || e.agentId || e.isAborted) return result
     const messages = await sync($)
     S.sinceMap += 1
@@ -118,7 +120,7 @@ export function register(on, options) {
     if (S.sinceMap >= S.every || overdue()) {
       const work = overdue() ? catchUp($, messages) : refreshMap($, messages, false)
       // Headless runs exit when the hook returns, so tests can ask us to wait
-      if (await $.env.get('DIAGRAM_PANE_SYNC')) await work
+      if (await syncAsked($)) await work
     }
     await redraw($)
     return result
@@ -135,7 +137,7 @@ export function register(on, options) {
       return {}
     }
     const work = refreshMap($, messages, arg === 'force')
-    if (await $.env.get('DIAGRAM_PANE_SYNC')) await work
+    if (await syncAsked($)) await work
     return {}
   })
 
