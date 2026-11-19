@@ -39,8 +39,9 @@ export function pickAction(envAction, envAutoHandoff, setting) {
 
 async function loadConfig($, options) {
   const main = await $.env.get('CACHE_CLOCK_MAIN_TTL_MIN')
-  cfg.mainTtl = minutes(main, DEFAULT_MAIN_TTL_MIN * MIN)
-  cfg.pinned = main !== undefined // a value you set wins over the transcript
+  const pinned = minutes(main, null)
+  cfg.mainTtl = pinned ?? DEFAULT_MAIN_TTL_MIN * MIN
+  cfg.pinned = pinned !== null // a valid value you set wins over the transcript
   cfg.subTtl = minutes(await $.env.get('CACHE_CLOCK_SUB_TTL_MIN'), DEFAULT_SUB_TTL_MIN * MIN)
   cfg.warn = minutes(await $.env.get('CACHE_CLOCK_WARN_MIN'), DEFAULT_WARN_MIN * MIN)
   cfg.sound = (await $.env.get('CACHE_CLOCK_SOUND')) === '1'
