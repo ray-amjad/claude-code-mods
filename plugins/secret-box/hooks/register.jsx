@@ -33,6 +33,10 @@ const WAIT_MS = 10 * 60_000
 const SECRET_NAME = /KEY|TOKEN|SECRET|PASS|PWD|CREDENTIAL|AUTH|PRIVATE|DSN|SALT|SIGNING|WEBHOOK/i
 const ASSIGNMENT = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(.*)$/gm
 
+// git's global long options that take a value (--git-dir dir, --work-tree=dir ...)
+const GIT_VALUE_LONG_OPTS = 'git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
+const GIT_VALUE_LONG_OPT = new RegExp(`^--(${GIT_VALUE_LONG_OPTS})$`)
+
 export function register(on, options) {
   // request_secret answers with a live placeholder: keep it live
   redact(on, options || {}, { name: 'secret-box', liveTools: [TOOL] })
@@ -180,7 +184,7 @@ export const WAITS = {
 }
 let waits = null
 async function pause($) {
-  waits ||= [...((await $.env.get('OS')) === 'Windows_NT' ? WAITS.windows : WAITS.unix)]
+  waits ||= [...((await isWindows($)) ? WAITS.windows : WAITS.unix)]
   for (;;) {
     try {
       return await $.process.run(waits[0], { timeoutMs: 5000 })
@@ -201,7 +205,6 @@ export function isEnvFile(path) {
   return /^\.env(\.[\w.-]+)?$/.test(base) && !/\.(example|sample|template|dist)$/.test(base)
 }
 
-// The .env files a tool call reads or names, as written in the call
 // The request_secret tool: what Claude reads about it
 async function registerBox($) {
   await $.tool.register({
@@ -228,6 +231,7 @@ async function registerBox($) {
   })
 }
 
+// The .env files a tool call reads or names, as written in the call
 function envFiles(e) {
   const direct = [e.file_path, e.notebook_path, e.path].filter(isEnvFile)
   const named = String(e.command || '').match(/(?:^|[^\w.\/-])((?:[\w.\/-]*\/)?\.env(?:\.[\w.-]+)?)(?![\w.-])/g) || []
@@ -242,8 +246,9 @@ async function learnDotenv($, files) {
   try { cwd = await $.session.cwd() } catch {}
   for (const f of files) {
     try {
-      const path = isAbsolute(f) ? f : f.startsWith('~/') ? f : cwd + '/' + f
-      if (path.startsWith('~/') || !(await $.fs.exists(path))) continue
+      if (f.startsWith('~/')) continue
+      const path = isAbsolute(f) ? f : cwd + '/' + f
+      if (!(await $.fs.exists(path))) continue
       for (const m of (await $.fs.read(path)).matchAll(ASSIGNMENT)) {
         const value = m[3].trim().replace(/^["']|["']$/g, '')
         if (value.length >= 6 && SECRET_NAME.test(m[2])) keepSecret(value)
@@ -665,7 +670,6 @@ function assignments(cmds) {
     v.words.push(word)
     if (at !== undefined) v.sureAt = Math.min(v.sureAt, at)
   }
-  const assignment = w => !w.parts[0].q && w.parts[0].lit?.match(/^([A-Za-z_]\w*)=/)
   for (const [at, all] of cmds.entries()) {
     // then W=/x, do W=/x ...: inside a branch or a loop
     const lead = all.findIndex(w => !/^(if|then|elif|else|do|while|until|!|\{|time)$/.test(literal(w) ?? ''))
@@ -676,9 +680,9 @@ function assignments(cmds) {
     // assignment alone, run for sure, sets W for what follows; W=/x git ...
     // sets it for that git only, which still expands $W to the old value.
     const isDeclare = /^(export|declare|typeset|local|readonly)$/.test(first)
-    const sure = all.sure && lead === 0 && (isDeclare || words.every(assignment)) ? at : undefined
+    const sure = all.sure && lead === 0 && (isDeclare || words.every(isAssignment)) ? at : undefined
     for (const w of isDeclare ? words.slice(1) : words) {
-      const m = assignment(w)
+      const m = assignmentOf(w)
       if (!m) {
         if (isDeclare) continue
         break
@@ -784,7 +788,7 @@ async function gitDirs($, cmd) {
         else if (opt === null && words[k].parts[0].lit?.startsWith('-C') && !words[k].parts[0].q) {
           value = { parts: [{ ...words[k].parts[0], lit: words[k].parts[0].lit.slice(2) }, ...words[k].parts.slice(1)], raw: words[k].raw.slice(2) }
         } else if (opt?.startsWith('-C')) value = { parts: [{ lit: opt.slice(2), q: false }], raw: opt.slice(2) }
-        else if (opt === '-c' || /^--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)$/.test(opt ?? '')) k++
+        else if (opt === '-c' || GIT_VALUE_LONG_OPT.test(opt ?? '')) k++
         else if (!/^-/.test(opt ?? words[k].parts[0].lit ?? '')) break
         if (!value) continue
         const texts = await expand($, value, vars, index)
@@ -816,7 +820,9 @@ async function gitDirs($, cmd) {
 // builtin or command before cd
 const LEADS = /^(if|then|elif|else|do|while|until|!|\{|time|builtin|command)$/
 const CD = /^(cd|pushd|popd)$/
-const isAssignment = w => !w.parts[0]?.q && /^[A-Za-z_]\w*=/.test(w.parts[0]?.lit ?? '')
+// A word that starts NAME=, unquoted: the match holds NAME and the NAME= prefix
+const assignmentOf = w => (!w.parts[0]?.q && w.parts[0]?.lit?.match(/^([A-Za-z_]\w*)=/)) || null
+const isAssignment = w => assignmentOf(w) !== null
 
 // Where a cd, pushd or popd (words[0]) moves: { to, mode }, `to` each
 // directory it may go to, relative or absolute ({ unresolved } when that can't
@@ -958,7 +964,7 @@ function gitRunPattern(subs, flags) {
   const option = String.raw`(?:-[${VALUE_OPTS}]\s+[^\s;&|]+|-(?![${VALUE_OPTS}](?:\s|$))\S*)`
   const wrap = String.raw`((?:(?:\w+=${ARG}|if|then|do|else|elif|while|until|(?:time|nohup|exec|xargs|nice|command|env|sudo)(?:\s+${option})*|!|\{)\s+)*)`
   const git = String.raw`(?:"[^"]*[\/\\]git(?:\.exe)?"|'[^']*[\/\\]git(?:\.exe)?'|(?:[^\s"';&|]*[\/\\])?git(?:\.exe)?)`
-  const long = 'git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
+  const long = GIT_VALUE_LONG_OPTS
   const opts = String.raw`(?:\s+(?:-[cC]\s*${ARG}|--(?:${long})(?:=|\s+)${ARG}|--(?!(?:${long})\b)[\w-]+(?:=\S+)?|-[pP]))*`
   // Group 1: the wrappers before git. Group 2: the sub-command's own arguments,
   // up to the next ; & | or newline (a redirection such as 2>&1 or &> does not end them).
