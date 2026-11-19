@@ -203,8 +203,9 @@ export const register: Register = (on, options) => {
         } while (again)
       } finally {
         polling = false
+        // A poll that throws must not end the loop for the session
+        timer = $.clock.after(active ? activeMs : idleMs, loop)
       }
-      timer = $.clock.after(active ? activeMs : idleMs, loop)
     }
 
     // A push cancels the pending idle wait and looks now.
