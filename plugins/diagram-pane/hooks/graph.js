@@ -13,6 +13,7 @@ const KIND_BOX = { file: 'single', component: 'round', step: 'double' }
 
 export const clone = g => JSON.parse(JSON.stringify(g))
 
+export const KINDS = Object.keys(KIND_BOX)
 export const boxOf = kind => KIND_BOX[kind] || 'single'
 
 // Mermaid ids are words; anything else becomes `_`
@@ -117,8 +118,9 @@ export function carrySubs(before, after, { sameLabel = false } = {}) {
   return out
 }
 
-// Patch a graph. ops: [{ op, id, label, kind, from, to }], op one of
-// add_node, remove_node, relabel, set_kind, add_edge, remove_edge.
+export const OPS = ['add_node', 'remove_node', 'relabel', 'set_kind', 'add_edge', 'remove_edge']
+
+// Patch a graph. ops: [{ op, id, label, kind, from, to }], op one of OPS.
 // Returns { graph, changes }; throws on an op it cannot apply.
 export function applyOps(graph, ops) {
   const g = clone(graph || { nodes: [], edges: [] })

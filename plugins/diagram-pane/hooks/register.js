@@ -14,7 +14,7 @@
 // Claude learns what the pane shows only through those two tools.
 
 import { findDiagrams, parseMermaid, drawGraph, short } from './draw.js'
-import { adoptIds, allIds, applyOps, boxOf, carrySubs, cleanId, levelAt, setLevel, toMermaid, uniqueIds } from './graph.js'
+import { adoptIds, allIds, applyOps, boxOf, carrySubs, cleanId, KINDS, levelAt, OPS, setLevel, toMermaid, uniqueIds } from './graph.js'
 
 const PANE = 'diagrams'
 // The engine names a mod's tool mcp__<plugin name>__<tool name>
@@ -226,7 +226,7 @@ const GATE_SYSTEM = 'You watch a coding agent so a small diagram of its work sta
 
 const SIDE = '[diagram-pane side request: not from the user. Do not continue the task and do not call tools.]'
 
-const JSON_SHAPE = `{"title":"what it is, max 40 chars","nodes":[{"id":"a","label":"max 20 chars","kind":"file|component|step","now":false}],"edges":[{"from":"a","to":"b","label":"optional, max 10 chars"}]}`
+const JSON_SHAPE = `{"title":"what it is, max 40 chars","nodes":[{"id":"a","label":"max 20 chars","kind":"${KINDS.join('|')}","now":false}],"edges":[{"from":"a","to":"b","label":"optional, max 10 chars"}]}`
 
 const FORK_PROMPT = `${SIDE}
 Draw a compact map of the work in this session right now: the files, components and steps involved, and how they connect.
@@ -538,10 +538,10 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              op: { type: 'string', enum: ['add_node', 'remove_node', 'relabel', 'set_kind', 'add_edge', 'remove_edge'] },
+              op: { type: 'string', enum: OPS },
               id: { type: 'string' },
               label: { type: 'string' },
-              kind: { type: 'string', enum: ['file', 'component', 'step'] },
+              kind: { type: 'string', enum: KINDS },
               from: { type: 'string' },
               to: { type: 'string' },
             },
