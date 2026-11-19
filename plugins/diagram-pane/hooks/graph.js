@@ -126,8 +126,10 @@ export const OPS = ['add_node', 'remove_node', 'relabel', 'set_kind', 'add_edge'
 export function applyOps(graph, ops) {
   const g = clone(graph || { nodes: [], edges: [] })
   const changes = []
+  // An op names a node as written or as add_node cleaned it ("my node" is my_node)
+  const key = id => (g.nodes.some(n => n.id === id) ? id : cleanId(id))
   const find = id => {
-    const n = g.nodes.find(n => n.id === id)
+    const n = g.nodes.find(n => n.id === key(id))
     if (!n) throw new Error(`no node "${id}" (ids: ${g.nodes.map(n => n.id).join(', ') || 'none'})`)
     return n
   }
@@ -155,21 +157,23 @@ export function applyOps(graph, ops) {
         break
       }
       case 'set_kind': {
-        find(o.id).box = boxOf(o.kind)
-        changes.push(`${o.id} is now a ${o.kind}`)
+        const n = find(o.id)
+        n.box = boxOf(o.kind)
+        changes.push(`${n.id} is now a ${o.kind}`)
         break
       }
       case 'add_edge': {
-        find(o.from), find(o.to)
-        g.edges.push({ from: o.from, to: o.to, label: String(o.label || '') })
-        changes.push(`linked ${o.from} → ${o.to}`)
+        const from = find(o.from).id, to = find(o.to).id
+        g.edges.push({ from, to, label: String(o.label || '') })
+        changes.push(`linked ${from} → ${to}`)
         break
       }
       case 'remove_edge': {
+        const from = key(o.from), to = key(o.to)
         const before = g.edges.length
-        g.edges = g.edges.filter(e => !(e.from === o.from && e.to === o.to))
-        if (g.edges.length === before) throw new Error(`no edge ${o.from} → ${o.to}`)
-        changes.push(`unlinked ${o.from} → ${o.to}`)
+        g.edges = g.edges.filter(e => !(e.from === from && e.to === to))
+        if (g.edges.length === before) throw new Error(`no edge ${from} → ${to}`)
+        changes.push(`unlinked ${from} → ${to}`)
         break
       }
       default:
