@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromMsys, isAbsolute, isEnvFile, isNotARepo, isNotFound, lexical, WAITS, withoutData } from '../hooks/register'
+import { fromMsys, isAbsolute, isEnvFile, isNotARepo, lexical, withoutData } from '../hooks/commit-guard'
+import { isNotFound, WAITS } from '../hooks/register'
 
 // Fake keys, built at run time so no key-shaped string sits in the repo
 const STRIPE = 'sk_' + 'live_' + 'A1b2C3d4E5f6G7h8J9k0L1m2'
