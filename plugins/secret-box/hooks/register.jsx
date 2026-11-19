@@ -296,7 +296,9 @@ async function saveToDotenv($, cwd, file, name, value) {
 
   const path = cwd + sep + file
   const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-  const line = `${name}=${quote(value)}`
+  // A file written with CRLF (Windows) keeps CRLF on the line we write
+  const eol = old.includes('\r\n') ? '\r' : ''
+  const line = `${name}=${quote(value)}${eol}`
   const lines = old.split('\n').filter((l, i, all) => !(i === all.length - 1 && l === ''))
   const at = lines.findIndex(l => HEAD.exec(l)?.[2] === name)
   if (at >= 0) lines[at] = (/^\s*export\s/.test(lines[at]) ? 'export ' : '') + line
