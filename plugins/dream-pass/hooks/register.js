@@ -367,7 +367,10 @@ async function apply($, dir, files, plan, stamp, why) {
     await $.fs.write(dir + '/' + name, linked)
     if (name !== 'MEMORY.md') changes.push({ kind: 'links', file: name, why: 'links now point at the merged file' })
   }
-  if (plan.index) plan.index = dropDeadPointers(plan.index, await readMemory($, dir))
+  if (plan.index) {
+    const now = await readMemory($, dir)
+    plan.index = keepListed(dropDeadPointers(plan.index, now), files['MEMORY.md'] || '', now)
+  }
   if (plan.index && plan.index.trim() !== files['MEMORY.md'].trim()) {
     await $.fs.write(dir + '/MEMORY.md', plan.index)
     changes.push({ kind: 'index', file: 'MEMORY.md', why: plan.index.trim().split('\n').length + ' lines' })
@@ -384,6 +387,20 @@ export function dropDeadPointers(index, files) {
     const m = line.match(LINK)
     return !m || m[1] in files
   }).join('\n')
+}
+
+// A memory the old index listed and the new one forgot keeps its old line. The plan's
+// index can't know which of its edits were dropped (an overlapping merge, say), so a
+// file that survived one of them would otherwise fall out of the index
+export function keepListed(index, oldIndex, files) {
+  const linked = new Set([...index.matchAll(new RegExp(LINK, 'g'))].map((m) => m[1]))
+  const lost = oldIndex.split('\n').filter((line) => {
+    const m = line.match(LINK)
+    if (!m || linked.has(m[1]) || !(m[1] in files)) return false
+    linked.add(m[1])
+    return true
+  })
+  return lost.length ? index.replace(/\n*$/, '\n') + lost.join('\n') + '\n' : index
 }
 
 // Undo from the command or the band: a failure is said, never left unhandled
