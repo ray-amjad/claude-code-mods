@@ -148,3 +148,10 @@ test('a stalled request that wakes after a newer one only lets go of its own', a
   expect(String(a.result)).toMatch(/cancelled\. A_KEY was not saved/)
   expect(h.files['/repo/.env']).toBe(`B_KEY=${DUMMY}\n`)
 })
+
+test('a saved key replaces its line however it was written (export, spaces, CRLF), never a second copy', async ($, on) => {
+  const h = host(on, { onPause: (n) => (n === 1 ? typeAndSave($, DUMMY) : Promise.resolve()) })
+  h.files['/repo/.env'] = 'A=1\r\nexport DUMMY_KEY = old\r\nB=2\r\n'
+  await ask($, { name: 'DUMMY_KEY' })
+  expect(h.files['/repo/.env']).toBe(`A=1\r\nexport DUMMY_KEY=${DUMMY}\r\nB=2\r\n`)
+})

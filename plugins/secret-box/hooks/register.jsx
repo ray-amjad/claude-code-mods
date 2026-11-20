@@ -325,8 +325,9 @@ function quote(v) {
 }
 
 // The value a .env line holds: quote's escapes undone in double quotes, so a
-// saved value is learned again as itself
+// saved value is learned again as itself. Only the escapes quote writes (\\, \" and
+// \n) are undone: a hand-written backslash before anything else is kept as written
 function unquote(v) {
-  if (/^"(?:[^"\\]|\\.)*"$/.test(v)) return v.slice(1, -1).replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c))
+  if (/^"(?:[^"\\]|\\.)*"$/.test(v)) return v.slice(1, -1).replace(/\\(.)/g, (all, c) => (c === 'n' ? '\n' : c === '\\' || c === '"' ? c : all))
   return v.replace(/^["']|["']$/g, '')
 }

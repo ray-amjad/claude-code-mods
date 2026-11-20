@@ -976,3 +976,21 @@ test('a result too large to scan is withheld with a message that names secret-bo
   expect(said).toContain('secret-box')
   expect(said).not.toContain('transcript-redactor')
 })
+
+// .env double quotes: quote()'s own escapes are undone, any other backslash is the value's
+test('a hand-written backslash in a double-quoted .env value is learned as written', async ($, on) => {
+  const value = 'ab\\dc' + WEAK // ab\dc... with one real backslash
+  stubs(on, { output: `connected with ${value}`, dotenv: `DB_PASSWORD="${value}"\n` })
+  await call($, { tool: 'Read', file_path: '/repo/.env' })
+  const out = String((await call($, { tool: 'Bash', command: 'node db.js' })).result)
+  expect(out).not.toContain(value)
+})
+
+test('a value saved with escaped quotes and backslashes is learned back as itself', async ($, on) => {
+  const value = 'say "hi" c:\\x ' + WEAK
+  const saved = '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"' // what quote() writes
+  stubs(on, { output: `got ${value}`, dotenv: `DB_PASSWORD=${saved}\n` })
+  await call($, { tool: 'Read', file_path: '/repo/.env' })
+  const out = String((await call($, { tool: 'Bash', command: 'node db.js' })).result)
+  expect(out).not.toContain(value)
+})
