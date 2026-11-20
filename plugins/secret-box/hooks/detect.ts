@@ -1269,6 +1269,8 @@ function cookieSecret(raw: string, cfg: Config): boolean {
 // A session cookie whose value is a UUID is the credential, however low its
 // entropy reads: `sid=<uuid>`, `session_token=<uuid>`.
 const SESSION_COOKIE_NAME = /sess|sid|token|auth/i
+const COOKIE_LINE = /(?:^|["'\s])(?:(?:set-)?cookie["']?[ \t]*:|(?:-b|--cookie)[ \t])/i
+const QUOTED_COOKIE_UUID = new RegExp(String.raw`(^|[\s;:'"])([^=;\s"']+=)(\\?")(${UUID})(?=\\?")`, 'gi')
 function sessionCookie(name: string, raw: string, cfg: Config): boolean {
   return SESSION_COOKIE_NAME.test(name) && SESSION_UUID.test(raw) && !cfg.allow.has(raw)
 }
@@ -1282,6 +1284,20 @@ function scrubCookies(text: string, cfg: Config): string {
         !COOKIE_ATTR.test(name) && (cookieSecret(v, cfg) || sessionCookie(name, v, cfg)) ? sep + name + mint('SECRET', v) : pair,
       ),
     )
+    // A quoted value (`sid="<uuid>"`) ends the header capture at its quote,
+    // so a session UUID in quotes is judged here, one cookie line at a time.
+    if (out.includes('="') || out.includes('=\\"')) {
+      out = out
+        .split('\n')
+        .map((line) =>
+          COOKIE_LINE.test(line)
+            ? line.replace(QUOTED_COOKIE_UUID, (m, sep: string, name: string, q: string, v: string) =>
+                sessionCookie(name, v, cfg) ? sep + name + q + mint('SECRET', v) : m,
+              )
+            : line,
+        )
+        .join('\n')
+    }
   }
   if (out.includes('\t')) {
     out = out.replace(COOKIES_TXT, (m, head: string, v: string) =>

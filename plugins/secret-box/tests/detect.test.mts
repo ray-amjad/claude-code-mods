@@ -368,6 +368,11 @@ const ROUND_TRIP: string[] = [
   hide('low-entropy sid uuid cookie', `Cookie: sid=${flat}`, flat)
   const flat2 = ['aaaa', '1111'].join('') + '-bbbb-2222-cccc-' + ['3333', 'dddd', '4444'].join('')
   hide('low-entropy uuid in cookies.txt', `.example.org\tTRUE\t/\tTRUE\t0\tsession_token\t${flat2}`, flat2)
+  // A quoted cookie value ends the header capture at its quote.
+  const flat3 = ['abab', 'abab'].join('') + '-abab-4bab-abab-' + ['abab', 'abab', 'abab'].join('')
+  hide('low-entropy quoted sid uuid set-cookie', `Set-Cookie: sid="${flat3}"; Path=/; HttpOnly`, flat3)
+  const flat4 = ['0000', '0000'].join('') + '-0000-4000-8000-' + ['0000', '0000', '0001'].join('')
+  hide('low-entropy quoted uuid cookie, escaped', `{"h":"Cookie: a=b; session_token=\\"${flat4}\\""}`, flat4)
   const i = uuid()
   hide('uuid after a key name', `API_KEY=${i}`, i)
   const j = uuid()
