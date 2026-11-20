@@ -32,7 +32,10 @@ const WAIT_MS = 10 * 60_000
 
 // A .env key whose name says it holds a secret
 const SECRET_NAME = /KEY|TOKEN|SECRET|PASS|PWD|CREDENTIAL|AUTH|PRIVATE|DSN|SALT|SIGNING|WEBHOOK/i
-const ASSIGNMENT = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(.*)$/gm
+// NAME=, export NAME= or NAME = : the head of a .env line, read and rewritten the same way
+const ASSIGNMENT_HEAD = String.raw`(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)`
+const ASSIGNMENT = new RegExp(`^${ASSIGNMENT_HEAD}(.*)$`, 'gm')
+const HEAD = new RegExp(`^${ASSIGNMENT_HEAD}`)
 
 export function register(on, options) {
   // request_secret answers with a live placeholder: keep it live
@@ -242,8 +245,12 @@ async function learnDotenv($, files) {
       const path = isAbsolute(f) ? f : cwd + '/' + f
       if (!(await $.fs.exists(path))) continue
       for (const m of (await $.fs.read(path)).matchAll(ASSIGNMENT)) {
-        const value = m[3].trim().replace(/^["']|["']$/g, '')
-        if (value.length >= 6 && SECRET_NAME.test(m[2])) keepSecret(value)
+        if (!SECRET_NAME.test(m[2])) continue
+        // The value as the file holds it and as it means: a command can print either
+        const raw = m[3].trim()
+        for (const value of new Set([unquote(raw), raw.replace(/^["']|["']$/g, '')])) {
+          if (value.length >= 6) keepSecret(value)
+        }
       }
     } catch {}
   }
@@ -295,10 +302,12 @@ async function saveToDotenv($, cwd, file, name, value) {
 
   const path = cwd + sep + file
   const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-  const line = `${name}=${quote(value)}`
+  // A file written with CRLF (Windows) keeps CRLF on the line we write
+  const eol = old.includes('\r\n') ? '\r' : ''
+  const line = `${name}=${quote(value)}${eol}`
   const lines = old.split('\n').filter((l, i, all) => !(i === all.length - 1 && l === ''))
-  const at = lines.findIndex(l => l.startsWith(name + '='))
-  if (at >= 0) lines[at] = line
+  const at = lines.findIndex(l => HEAD.exec(l)?.[2] === name)
+  if (at >= 0) lines[at] = (/^\s*export\s/.test(lines[at]) ? 'export ' : '') + line
   else lines.push(line)
   await $.fs.write(path, lines.join('\n') + '\n')
   return path + (isIgnored ? '' : ` (and added ${file} to ${gi})`)
@@ -317,4 +326,12 @@ async function gitIgnores($, cwd, file, ignore) {
 // Plain values stay bare; anything with spaces, quotes or # gets double quotes.
 function quote(v) {
   return /^[A-Za-z0-9_\-.\/:+=@]*$/.test(v) ? v : '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"'
+}
+
+// The value a .env line holds: quote's escapes undone in double quotes, so a
+// saved value is learned again as itself. Only the escapes quote writes (\\, \" and
+// \n) are undone: a hand-written backslash before anything else is kept as written
+function unquote(v) {
+  if (/^"(?:[^"\\]|\\.)*"$/.test(v)) return v.slice(1, -1).replace(/\\(.)/g, (all, c) => (c === 'n' ? '\n' : c === '\\' || c === '"' ? c : all))
+  return v.replace(/^["']|["']$/g, '')
 }
