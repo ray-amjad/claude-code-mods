@@ -966,3 +966,12 @@ test('withoutData blanks only data given to a data program', async () => {
   expect(withoutData('echo "a $(git commit) b"')).toBe('echo "a $(git commit) b"')
   expect(withoutData("python3 - <<'EOF'\ngit commit\nEOF")).toBe("python3 - <<'EOF'\n          \nEOF")
 })
+
+// The redactor runs inside secret-box, so what the user reads names secret-box
+test('a result too large to scan is withheld with a message that names secret-box', async ($, on) => {
+  stubs(on, { output: 'x'.repeat(17_000_000) })
+  const r = await call($, { tool: 'Bash', command: 'cat big.log' })
+  const said = JSON.stringify(r)
+  expect(said).toContain('secret-box')
+  expect(said).not.toContain('transcript-redactor')
+})

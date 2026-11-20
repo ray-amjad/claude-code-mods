@@ -82,10 +82,10 @@ export function register(on, options) {
 
   // While a dream runs, Claude's own writes to the memory folder wait, so the
   // dream can't overwrite a memory saved after it read the folder
-  on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+  on('tool.call', { tool: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] }, async ($, e, next) => {
     if (!S.busy || e.agentId) return next(e)
     const dir = await memoryDir($, options)
-    return isInside(String(e.file_path || ''), dir)
+    return isInside(String(e.file_path || e.notebook_path || ''), dir)
       ? { deny: 'dream-pass is consolidating the memory folder right now. Try this write again in a minute.' }
       : next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)))

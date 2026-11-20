@@ -39,6 +39,7 @@ const OUTSIDE_TEXT = new Set(['file', 'edited_text_file', 'queued_command'])
 
 type Budget = { budget: { remainingMs: number } }
 
+// Throws before a scan that cannot finish: the `.catch` then withholds.
 function guard(text: string, next: Budget): void {
   if (text.length > SCAN_CAP) throw new Error('text too large to scan')
   const needMs = 300 + text.length / 4000
@@ -84,6 +85,7 @@ export function redact(on: Parameters<Register>[0], options: Parameters<Register
   // An `allowUrlHosts` entry that is not a host name is said once, not dropped silently.
   let warnedHosts = cfg.allowUrlRejected.length === 0
 
+  // Counts the values hidden, not the placeholders that stand for quoted text.
   const countHidden = (tags: Set<string>): number => [...tags].filter((t) => !isLiteralTag(t)).length
 
   // 1. What the user types. A pasted key never reaches the model as itself,
@@ -142,6 +144,7 @@ export function redact(on: Parameters<Register>[0], options: Parameters<Register
 
     const escape = !liveTools.has(e.tool)
     const st: WalkState = { incomplete: false }
+    // The result and the text often hold the same string: scan it once.
     const memo = new Map<string, string>()
     const clean = (s: string): string => {
       const done = memo.get(s)
@@ -167,6 +170,7 @@ export function redact(on: Parameters<Register>[0], options: Parameters<Register
     if (r.isError) return { isError: true as const, result: value.result, text: value.text, ...context }
     return { result: value.result, ...context } as typeof r
   }).catch(async ($, e, next) => {
+    // Nothing ran yet: refuse the call. The tool answered: withhold it.
     if (!next.called) return { deny: WITHHELD }
     const r = await next(e)
     if (r.deny !== undefined) return { deny: WITHHELD }

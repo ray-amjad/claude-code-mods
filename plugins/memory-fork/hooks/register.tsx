@@ -244,11 +244,11 @@ export const register: Register = on => {
     }
   })
 
-  on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+  on('tool.call', { tool: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const dir = await memoryDir($)
 
-    return isInside(e.file_path, dir)
+    return isInside(String(e.file_path || e.notebook_path || ''), dir)
       ? { deny: 'memory-fork: memory is written by the background fork at the end of the turn, not by the main session.' }
       : next(e)
   }).catch(($, e, next) => next(e))
