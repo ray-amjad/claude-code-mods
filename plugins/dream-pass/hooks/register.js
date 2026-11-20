@@ -369,7 +369,8 @@ async function apply($, dir, files, plan, stamp, why) {
   }
   if (plan.index) {
     const now = await readMemory($, dir)
-    plan.index = keepListed(dropDeadPointers(plan.index, now), files['MEMORY.md'] || '', now)
+    // The old rows come from MEMORY.md as it is now, with its links already redirected
+    plan.index = keepListed(dropDeadPointers(plan.index, now), now['MEMORY.md'] ?? files['MEMORY.md'] ?? '', now)
   }
   if (plan.index && plan.index.trim() !== files['MEMORY.md'].trim()) {
     await $.fs.write(dir + '/MEMORY.md', plan.index)
