@@ -1,7 +1,10 @@
 # Code Mode: a value a script builds itself reaches the model raw
 
-Status: open, a Claude Code bug. Found on Claude Code 2.1.329 with
-`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`, in an interactive session.
+Status: open, two Claude Code bugs, filed upstream as
+[anthropics/claude-code#111259](https://github.com/anthropics/claude-code/issues/111259)
+and [anthropics/claude-code#111260](https://github.com/anthropics/claude-code/issues/111260).
+Found on Claude Code 2.1.329 with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`, in an
+interactive session.
 
 transcript-redactor scrubs every call a Code Mode script makes (`` $` ``,
 `tools.Bash`, `file().text()`), because each one passes `tool.call`. What it
@@ -42,12 +45,13 @@ not the cause.
 1. **The async REPL PostToolUse pass skips hooks modules.** The mod types say a
    `classic.*` event "fires wherever the engine runs the classic hook". Settings
    hooks run in that pass; a module's `classic.PostToolUse` does not. With it,
-   the hook below would close the gap
-   with no workaround.
+   the hook below would close the gap with no workaround. Filed as
+   [anthropics/claude-code#111259](https://github.com/anthropics/claude-code/issues/111259).
 2. **A `prompt.attachment` answer for `poll_events` is ignored.** The rewrite
    or drop is logged as applied, but the `envelopes` are what is sent and stored.
+   Filed as [anthropics/claude-code#111260](https://github.com/anthropics/claude-code/issues/111260).
 
-## The hook to add once (1) is fixed
+## The hook to add once #111259 is fixed
 
 ```ts
 on('classic.PostToolUse', async ($, e, next) => {
