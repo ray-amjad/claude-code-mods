@@ -950,8 +950,23 @@ function lettersLookRandom(token: string, named: boolean, h: number): boolean {
 // Claude Code transcripts and most analytics put a `sessionId` UUID on every
 // line. A UUID beside that name is an identifier, not a credential; a real
 // session cookie is random text, and the cookie rules hide it on their own.
+// `sid` is short for a session id (`SID=`, `X_SID=`, `"sid":`), so it is let
+// through too; `rsid` or `psid` is not. A bare `session` name is not: there
+// the value is the session itself, often a cookie. Inside a cookie header
+// (`Cookie: sid=<uuid>`, `Set-Cookie:`, `curl -b`) a `sid` is the session
+// credential, so the `sid` exemption stops there.
 const SESSION_UUID = new RegExp(`^${UUID}$`, 'i')
-const SESSION_ID_NAME = new RegExp(String.raw`sess(?:ion)?[_-]?id(?:${Q}|\s){0,6}[:=]{1,2}(?:${Q}|\s){0,4}$`, 'i')
+const SEP_SRC = String.raw`(?:${Q}|\s){0,6}[:=]{1,2}(?:${Q}|\s){0,4}`
+const SESSION_ID_NAME = new RegExp(String.raw`sess(?:ion)?[_-]?id${SEP_SRC}$`, 'i')
+const SID_NAME_SRC = String.raw`(?<![A-Za-z])sid${SEP_SRC}`
+const SID_NAME = new RegExp(`${SID_NAME_SRC}$`, 'i')
+const COOKIE_CONTEXT = /(?:(?:set-)?cookie["']?[ \t]*:|(?:^|\s)(?:-b|--cookie)[ \t]+)[^\n]*$/i
+function sessionIdName(before: string): boolean {
+  return SESSION_ID_NAME.test(before) || (SID_NAME.test(before) && !COOKIE_CONTEXT.test(before))
+}
+// The same pair inside one quoted string (`"SID=<uuid>"`), which the quoted
+// generated-password rule would otherwise take whole.
+const QUOTED_SESSION_ID = new RegExp(String.raw`^[\w-]*?(?:sess(?:ion)?[_-]?id${SEP_SRC}|${SID_NAME_SRC})${UUID}$`, 'i')
 
 function looksSecret(token: string, before: string, cfg: Config): boolean {
   if (token.startsWith('REDACTED-')) return false
@@ -961,7 +976,7 @@ function looksSecret(token: string, before: string, cfg: Config): boolean {
   // `invoice+statements+acct_<id>`: a mail sender address made of words and
   // a public id. Each `+` part has to be one, so base64 is still judged.
   if (token.includes('+') && token.split('+').every((p) => p === '' || WORD_PART.test(p) || isPublicId(p, named, cfg))) return false
-  if (named && SESSION_UUID.test(token) && SESSION_ID_NAME.test(before)) return false
+  if (named && SESSION_UUID.test(token) && sessionIdName(before)) return false
   // An MCP tool name (`mcp__<server>__<tool>`) joins two names, and the
   // server's can hold a UUID. Judged whole it reads as a mixed-case key, and
   // a hidden tool name can't be loaded or called. Each part is judged alone.
@@ -1167,6 +1182,7 @@ function scrubAssignments(text: string, cfg: Config): string {
   if (PW_SYMBOL.test(out)) {
     out = out.replace(QUOTED_VALUE, (m, q: string, v: string, offset: number, whole: string) => {
       if (!looksGenerated(v) || isStandIn(v) || cfg.allow.has(v)) return m
+      if (QUOTED_SESSION_ID.test(v) && !COOKIE_CONTEXT.test(whole.slice(Math.max(0, offset - 64), offset))) return m
       // A MIME boundary is random by design and public.
       if (/boundary=$/i.test(whole.slice(Math.max(0, offset - 9), offset))) return m
       return q + mint('SECRET', v) + q
@@ -1250,18 +1266,45 @@ function cookieSecret(raw: string, cfg: Config): boolean {
   return /[0-9]/.test(body) && /[A-Za-z]/.test(body) && entropy(body) >= cfg.contextMinEntropy
 }
 
+// A session cookie whose value is a UUID is the credential, however low its
+// entropy reads: `sid=<uuid>`, `session_token=<uuid>`.
+const SESSION_COOKIE_NAME = /sess|sid|token|auth/i
+const COOKIE_LINE = /(?:^|["'\s])(?:(?:set-)?cookie["']?[ \t]*:|(?:-b|--cookie)[ \t])/i
+const QUOTED_COOKIE_UUID = new RegExp(String.raw`(^|[\s;:'"])([^=;\s"']+=)(\\?")(${UUID})(?=\\?")`, 'gi')
+function sessionCookie(name: string, raw: string, cfg: Config): boolean {
+  return SESSION_COOKIE_NAME.test(name) && SESSION_UUID.test(raw) && !cfg.allow.has(raw)
+}
+
 function scrubCookies(text: string, cfg: Config): string {
   let out = text
   if (/cookie|-b\s/i.test(out)) {
     out = out.replace(COOKIE, (_m, head: string, header: string) =>
       head +
       header.replace(COOKIE_PAIR, (pair, sep: string, name: string, v: string) =>
-        !COOKIE_ATTR.test(name) && cookieSecret(v, cfg) ? sep + name + mint('SECRET', v) : pair,
+        !COOKIE_ATTR.test(name) && (cookieSecret(v, cfg) || sessionCookie(name, v, cfg)) ? sep + name + mint('SECRET', v) : pair,
       ),
     )
+    // A quoted value (`sid="<uuid>"`) ends the header capture at its quote,
+    // so a session UUID in quotes is judged here, one cookie line at a time.
+    if (out.includes('="') || out.includes('=\\"')) {
+      out = out
+        .split('\n')
+        .map((line) =>
+          COOKIE_LINE.test(line)
+            ? line.replace(QUOTED_COOKIE_UUID, (m, sep: string, name: string, q: string, v: string) =>
+                sessionCookie(name, v, cfg) ? sep + name + q + mint('SECRET', v) : m,
+              )
+            : line,
+        )
+        .join('\n')
+    }
   }
-  if (out.includes('\t')) out = out.replace(COOKIES_TXT, (m, head: string, v: string) => (cookieSecret(v, cfg) ? head + mint('SECRET', v) : m))
-  if (out.includes('"value"')) out = out.replace(HAR_COOKIE, (m, head: string, v: string) => (cookieSecret(v, cfg) ? `${head}${mint('SECRET', v)}"` : m))
+  if (out.includes('\t')) {
+    out = out.replace(COOKIES_TXT, (m, head: string, v: string) =>
+      cookieSecret(v, cfg) || sessionCookie(head.split('\t').at(-2) ?? '', v, cfg) ? head + mint('SECRET', v) : m,
+    )
+  }
+  if (out.includes('"value"')) out = out.replace(HAR_COOKIE, (m, head: string, v: string) => (cookieSecret(v, cfg) || sessionCookie(head, v, cfg) ? `${head}${mint('SECRET', v)}"` : m))
   return out
 }
 
