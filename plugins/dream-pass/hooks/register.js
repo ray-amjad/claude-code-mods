@@ -16,6 +16,13 @@
 // Output goes to the memory folder and to you, never back to Claude.
 
 const PANE = 'dream-pass'
+// An index line's link to a memory file: - [Title](file.md)
+const LINK = /\]\(([^)]+\.md)\)/
+// The index's own limits: a line or line count past these is a problem the code finds for free
+const INDEX_MAX_LINES = 200
+const INDEX_MAX_CHARS = 200
+// The dream writes the index tighter than that, so a few later additions don't trip the check
+const INDEX_TARGET_CHARS = 150
 
 // Everything the band and the pane show
 const S = {
@@ -47,10 +54,7 @@ export function register(on, options) {
     const turns = ((await $.store.get(key)) || 0) + 1
     await $.store.set(key, turns)
     if (turns % every !== 0) return result
-    const work = periodic($, options, 'every ' + every + ' turns')
-    // Headless runs exit when the hook returns, so a test can ask us to wait
-    if (await $.env.get('DREAM_PASS_SYNC')) await work
-    else work.catch((err) => $.ui.log('dream failed: ' + err.message))
+    await launch($, periodic($, options, 'every ' + every + ' turns'))
     return result
   })
 
@@ -58,7 +62,7 @@ export function register(on, options) {
   // while the full transcript is still there, but never hold compaction up.
   on('session.compact', async ($, e, next) => {
     if (!e.agentId && e.trigger !== 'precompute') {
-      dream($, options, 'before compaction').catch((err) => $.ui.log('dream failed: ' + err.message))
+      dream($, options, 'before compaction').catch((err) => logFailure($, err))
     }
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
@@ -70,9 +74,7 @@ export function register(on, options) {
     else if (arg === 'undo') await undo($, options)
     else if (arg === 'show') await $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 })
     else {
-      const work = dream($, options, '/dream')
-      if (await $.env.get('DREAM_PASS_SYNC')) await work
-      else work.catch((err) => $.ui.log('dream failed: ' + err.message))
+      await launch($, dream($, options, '/dream'))
     }
     // Print nothing Claude would read: the band, pane and toast carry the result
     return {}
@@ -80,10 +82,10 @@ export function register(on, options) {
 
   // While a dream runs, Claude's own writes to the memory folder wait, so the
   // dream can't overwrite a memory saved after it read the folder
-  on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+  on('tool.call', { tool: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] }, async ($, e, next) => {
     if (!S.busy || e.agentId) return next(e)
     const dir = await memoryDir($, options)
-    return String(e.file_path || '').startsWith(dir + '/')
+    return isInside(String(e.file_path || e.notebook_path || ''), dir)
       ? { deny: 'dream-pass is consolidating the memory folder right now. Try this write again in a minute.' }
       : next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
@@ -92,18 +94,22 @@ export function register(on, options) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const run = S.runs.findLast((r) => r.status !== 'tidy')
     if (e.props.hasSurvey || !run || run.id === S.hidden) return next(e)
+    // The bands of other mods draw under ours, one row fewer; one that fails must not take ours with it
+    let below = null
+    try { below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - 1) } }) } catch {}
     const { Box, Text, Button } = $.ui.resolve(e)
     const text = run.status === 'dreaming' ? 'Dream: dreaming over ' + run.before + ' memories (' + run.why + ') '
       : run.status === 'failed' ? 'Dream: failed (' + run.note + ') '
       : run.status === 'undone' ? 'Dream: undone, memory restored '
       : 'Dream: ' + summary(run) + ' '
-    return h(Box, null,
+    const band = h(Box, null,
       h(Text, { color: run.status === 'failed' ? 'red' : undefined, dimColor: run.status === 'done' }, text),
       h(Button, { key: 'open', label: 'Open', onPress: () => $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 }) }),
       h(Text, null, ' '),
       run.status === 'done' && h(Button, { key: 'undo', label: 'Undo', onPress: () => undo($, options) }),
       run.status === 'done' && h(Text, null, ' '),
       h(Button, { key: 'hide', label: 'Hide', onPress: () => { S.hidden = run.id; $.ui.invalidate('ui.render') } }))
+    return below ? h(Box, { flexDirection: 'column' }, band, below) : band
   })
 
   // The pane: every dream this session, newest first, one row per file
@@ -112,6 +118,26 @@ export function register(on, options) {
     return h(Box, { flexDirection: 'column' },
       ...paneRows().map((r) => h(Text, { color: r.color, bold: r.bold, dimColor: r.dim, wrap: 'truncate-end' }, r.text || ' ')))
   })
+}
+
+const logFailure = ($, err) => $.ui.log('dream failed: ' + err.message)
+
+// A dream runs behind the hook that started it. Headless runs exit when the
+// hook returns, so a test can ask us to wait with DREAM_PASS_SYNC.
+async function launch($, work) {
+  if (await $.env.get('DREAM_PASS_SYNC')) await work
+  else work.catch((err) => logFailure($, err))
+}
+
+// C:\x, C:/x, or a share: \\server\x or //server/x
+const WINDOWS_PATH = /^([A-Za-z]:[\\/]|\\\\|\/\/)/
+
+// Whether path is inside dir, with / or \ as the separator. Windows paths are compared
+// without case. memory-fork guards the same folder with the same check.
+export const isInside = (path, dir) => {
+  const windows = WINDOWS_PATH.test(dir) || WINDOWS_PATH.test(path)
+  const norm = (p) => (windows ? p.replace(/\\/g, '/').toLowerCase() : p)
+  return norm(path).startsWith(`${norm(dir)}/`)
 }
 
 // ---------- the gate ----------
@@ -149,11 +175,11 @@ async function periodic($, options, why) {
 export function indexProblems(files) {
   const index = files['MEMORY.md'] || ''
   const lines = index.split('\n')
-  const linked = [...index.matchAll(/\]\(([^)]+\.md)\)/g)].map((m) => m[1])
+  const linked = [...index.matchAll(new RegExp(LINK, 'g'))].map((m) => m[1])
   const out = []
-  if (lines.length > 200) out.push('index over 200 lines')
-  const long = lines.filter((l) => l.length > 200).length
-  if (long) out.push(long + ' index line(s) over 200 chars')
+  if (lines.length > INDEX_MAX_LINES) out.push(`index over ${INDEX_MAX_LINES} lines`)
+  const long = lines.filter((l) => l.length > INDEX_MAX_CHARS).length
+  if (long) out.push(`${long} index line(s) over ${INDEX_MAX_CHARS} chars`)
   const missing = linked.filter((f) => !(f in files)).length
   if (missing) out.push(missing + ' pointer(s) to missing files')
   const unlisted = Object.keys(files).filter((f) => f !== 'MEMORY.md' && !linked.includes(f)).length
@@ -212,6 +238,9 @@ async function dream($, options, why) {
     finish($, run, { status: 'done', changes, stamp, after: count(await readMemory($, dir)) })
     $.ui.toast('dreamed: ' + summary(run), { timeoutMs: 8000 })
     $.ui.log('dreamed: ' + summary(run) + ' (' + why + '), checked ' + run.checked + ' sources and ' + run.sessions + ' recent sessions, backup in .dream-backup/' + stamp)
+  } catch (err) {
+    finish($, run, { status: 'failed', note: err.message })
+    throw err
   } finally {
     S.busy = false
     $.ui.invalidate('ui.render')
@@ -246,7 +275,7 @@ Make these edits, and only where they are clearly right:
 - ADD a memory only for a preference, correction or fact the user stated at least twice (in two
   sessions, or in a session and this conversation) that no file covers yet.
 - Rewrite MEMORY.md: one line per surviving memory, "- [Title](file.md) - hook", each line under
-  150 characters, under 200 lines, grouped under the existing headings, every file listed once.
+  ${INDEX_TARGET_CHARS} characters, under ${INDEX_MAX_LINES} lines, grouped under the existing headings, every file listed once.
 Rules:
 - When two memories disagree, check the sources: the later, explicit statement wins. If the
   sources don't settle it, keep both and add "contradicts <file>, verify which is current".
@@ -340,7 +369,7 @@ async function apply($, dir, files, plan, stamp, why) {
 // Index lines that link to a file not in the folder are dropped, whatever the model wrote
 export function dropDeadPointers(index, files) {
   return index.split('\n').filter((line) => {
-    const m = line.match(/\]\(([^)]+\.md)\)/)
+    const m = line.match(LINK)
     return !m || m[1] in files
   }).join('\n')
 }

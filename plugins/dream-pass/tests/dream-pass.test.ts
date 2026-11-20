@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  commandFor, conversationSince, dropDeadPointers, indexProblems, keywords, originIds, parentDir, parsePlan, redirectLinks,
+  commandFor, conversationSince, isInside, dropDeadPointers, indexProblems, keywords, originIds, parentDir, parsePlan, redirectLinks,
   safeName, snippets, summary, suspects, userRows,
 } from '../hooks/register.js'
 
@@ -137,4 +137,13 @@ test('Windows uses PowerShell, with each path in an env var and never in the scr
   expect(commandFor(true, 'remove', paths)[1]).toEqual({ env: { DREAM_PASS_ARG: paths.join('\n') } })
   expect(commandFor(true, 'rename', 'C:\\m\\1', 'C:\\m\\undone-1')[1]).toEqual({ env: { DREAM_PASS_ARG: 'C:\\m\\1', DREAM_PASS_TO: 'C:\\m\\undone-1' } })
   expect(commandFor(true, 'alive', 4242)[1]).toEqual({ env: { DREAM_PASS_ARG: '4242' } })
+})
+
+test('the memory-write guard matches a Windows path with either separator, without case', () => {
+  const dir = 'C:\\Users\\U\\.claude\\projects\\C--p\\memory'
+  expect(isInside('C:\\Users\\U\\.claude\\projects\\C--p\\memory\\x.md', dir)).toBe(true)
+  expect(isInside('c:/users/u/.claude/projects/C--p/memory/x.md', dir)).toBe(true)
+  expect(isInside('C:\\Users\\U\\.claude\\projects\\C--p\\memory-other\\x.md', dir)).toBe(false)
+  expect(isInside('/home/u/.claude/projects/-p/memory/x.md', '/home/u/.claude/projects/-p/memory')).toBe(true)
+  expect(isInside('/home/u/.claude/projects/-p/Memory/x.md', '/home/u/.claude/projects/-p/memory')).toBe(false)
 })

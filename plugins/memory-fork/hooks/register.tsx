@@ -167,7 +167,14 @@ async function consider($: EngineInterface) {
 async function write($: EngineInterface) {
   const id = crypto.randomUUID()
   await update($, runs, list => [...list, { id, at: Date.now(), status: 'classifying', changes: [] } as Run].slice(-20))
+  try {
+    await classifyAndFork($, id)
+  } catch (err) {
+    await setRun($, id, { status: 'failed', reason: err instanceof Error ? err.message : String(err) })
+  }
+}
 
+async function classifyAndFork($: EngineInterface, id: string) {
   const dir = await memoryDir($)
   const index = await $.fs.read(`${dir}/MEMORY.md`).catch(() => '(empty)')
   const exchange = lastExchange(await $.session.messages())
@@ -237,11 +244,11 @@ export const register: Register = on => {
     }
   })
 
-  on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+  on('tool.call', { tool: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const dir = await memoryDir($)
 
-    return isInside(e.file_path, dir)
+    return isInside(String(e.file_path || e.notebook_path || ''), dir)
       ? { deny: 'memory-fork: memory is written by the background fork at the end of the turn, not by the main session.' }
       : next(e)
   }).catch(($, e, next) => next(e))
@@ -261,11 +268,16 @@ export const register: Register = on => {
     const latest = (await read($, runs)).findLast(run => run.status !== 'classifying' && run.status !== 'skipped')
     if (e.props.hasSurvey || !latest || latest.id === (await read($, dismissed))) return next(e)
 
+    // The bands of other mods draw under ours, one row fewer; one that fails must not take ours with it
+    let below = null
+    try {
+      below = await next({ ...e, props: { ...e.props, maxRows: Math.max(0, e.props.maxRows - 1) } })
+    } catch {}
     const { Box, Button, Text } = $.ui.resolve(e)
     const files = latest.changes.map(change => change.name).join(', ')
     const sum = totals(latest.changes)
 
-    return (
+    const band = (
       <Box>
         <Text color={latest.status === 'failed' ? 'red' : undefined}>
           {latest.status === 'forking' && `Memory: updating (${latest.reason}) `}
@@ -279,6 +291,14 @@ export const register: Register = on => {
         <Text> </Text>
         <Button key="hide" label="Hide" onPress={() => update($, dismissed, () => latest.id)} />
       </Box>
+    )
+    return below ? (
+      <Box flexDirection="column">
+        {band}
+        {below}
+      </Box>
+    ) : (
+      band
     )
   })
 

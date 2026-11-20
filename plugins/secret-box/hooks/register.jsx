@@ -15,7 +15,7 @@
 // the values in .env, and guards commits. Nothing is written but the env file
 // the secret goes to (.env by default) and its .gitignore line.
 
-import { register as redactor, LIVE_TAG_TOOLS, brand } from './redact.ts'
+import { redact } from './redact.ts'
 import { keepSecret } from './detect.ts'
 
 const TOOL = 'mcp__secret-box__request_secret'
@@ -35,9 +35,7 @@ const ASSIGNMENT = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(.*)$/gm
 
 export function register(on, options) {
   // request_secret answers with a live placeholder: keep it live
-  LIVE_TAG_TOOLS.add(TOOL)
-  brand.name = 'secret-box'
-  redactor(on, options || {})
+  redact(on, options || {}, { name: 'secret-box', liveTools: [TOOL] })
 
   // 1. Give Claude the tool, and teach the vault the secrets already in .env
   on('session.start', async ($, e, next) => {

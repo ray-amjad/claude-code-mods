@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { gateOf, homeDir, mergeRoster, parseListing, parseSkillMd } from '../hooks/register'
+import { dropFromListing, gateOf, homeDir, mergeRoster, parseListing, parseSkillMd } from '../hooks/register'
 
 // A session over a mocked store, no skills on disk, and a Jev that ranks
 // herdr first and says it fits.
@@ -153,4 +153,10 @@ test('the band keeps other mods\' bands beneath it', async ($, on) => {
   const ui = await $.ui.mount({ plugin: 'jev-skill-suggestion', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS } as never)
   expect(await ui.find({ type: 'Text', text: /herdr/ } as never)).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /other band/ } as never)).toBeDefined()
+})
+
+test('a disabled plugin:skill and its run-on lines leave the listing', () => {
+  const text = 'The following skills are available:\n- tools:herdr: Control Herdr.\n  More about herdr.\n- linkedin: Posts.'
+  expect(dropFromListing(text, new Set(['tools:herdr']))).toBe('The following skills are available:\n- linkedin: Posts.')
+  expect(dropFromListing(text, new Set(['tools']))).toBe(text)
 })

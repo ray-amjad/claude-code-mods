@@ -1,6 +1,6 @@
 {
   "name": "jev-skill-suggestion",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Scores every skill against your prompt with TypeSafe Jev as you type; observe, block or steer skill loading",
   "author": {
     "name": "Ray Amjad",

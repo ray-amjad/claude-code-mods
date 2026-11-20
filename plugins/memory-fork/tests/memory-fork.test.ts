@@ -45,6 +45,20 @@ test('the main session may not write the memory folder', async ($, on) => {
   expect(allowed.deny).toBeUndefined()
 })
 
+test('MultiEdit and NotebookEdit into the memory folder are blocked too', async ($, on) => {
+  mock.env(on, { HOME: '/home/r' })
+  on('session.cwd', () => ({ value: '/w/proj' }))
+  on('tool.call', () => ({ result: 'written' }) as never)
+
+  const multi = await $.tool.call({ tool: 'MultiEdit', file_path: '/home/r/.claude/projects/-w-proj/memory/x.md', edits: [] } as never)
+  const notebook = await $.tool.call({ tool: 'NotebookEdit', notebook_path: '/home/r/.claude/projects/-w-proj/memory/x.ipynb', new_source: 'x' } as never)
+  const allowed = await $.tool.call({ tool: 'MultiEdit', file_path: '/w/proj/x.md', edits: [] } as never)
+
+  expect(multi.deny ?? multi.text).toContain('memory-fork')
+  expect(notebook.deny ?? notebook.text).toContain('memory-fork')
+  expect(allowed.deny).toBeUndefined()
+})
+
 test('parseOps keeps bare memory names and never deletes the index', async () => {
   const ops = parseOps(`Here: {"write": [{"name": "a.md", "content": "x"}, {"name": "../evil.md", "content": "x"}, {"name": "b.txt", "content": "x"}], "delete": ["MEMORY.md", "c.md", "/etc/d.md"]}`)
 

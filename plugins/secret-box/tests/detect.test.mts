@@ -836,11 +836,18 @@ for (const text of ROUND_TRIP) {
   const root = new URL('../../', import.meta.url)
   const pairs = [
     ['secret-box/hooks/detect.ts', 'transcript-redactor/hooks/detect.ts'],
+    ['secret-box/hooks/redact.ts', 'transcript-redactor/hooks/redact.ts'],
     ['secret-box/tests/detect.test.mts', 'transcript-redactor/test/detect.test.mts'],
   ]
   for (const [x, y] of pairs) {
     const [fx, fy] = [new URL(x!, root), new URL(y!, root)]
     if (existsSync(fx) && existsSync(fy) && readFileSync(fx, 'utf8') !== readFileSync(fy, 'utf8')) fail(`COPY  ${x} and ${y} differ`)
+  }
+  // The settings that configure the detector are the same in both manifests.
+  const [mx, my] = ['secret-box', 'transcript-redactor'].map((m) => new URL(`${m}/.claude-plugin/plugin.json`, root))
+  if (existsSync(mx) && existsSync(my)) {
+    const settings = (u: URL) => JSON.stringify(JSON.parse(readFileSync(u, 'utf8')).userConfig)
+    if (settings(mx!) !== settings(my!)) fail('COPY  the userConfig of secret-box and transcript-redactor differ')
   }
 }
 

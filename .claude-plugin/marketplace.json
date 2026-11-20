@@ -44,7 +44,7 @@
       "name": "dream-pass",
       "source": "./plugins/dream-pass",
       "description": "A dreaming pass over Claude's memory folder: merges duplicates, rewrites stale entries, removes dead ones and tidies MEMORY.md, with a backup and undo",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "Ray Amjad"
       },
@@ -54,7 +54,7 @@
       "name": "jev-skill-suggestion",
       "source": "./plugins/jev-skill-suggestion",
       "description": "Scores every skill against your prompt with TypeSafe Jev as you type; observe, block or steer skill loading",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "Ray Amjad"
       },
@@ -64,7 +64,7 @@
       "name": "memory-fork",
       "source": "./plugins/memory-fork",
       "description": "After each turn Haiku decides whether memory needs a change; a tool-less fork of the session drafts it and the mod writes it, with a band and a pane showing what changed",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "author": {
         "name": "Ray Amjad"
       },
@@ -84,7 +84,7 @@
       "name": "secret-box",
       "source": "./plugins/secret-box",
       "description": "Claude can use a secret without seeing it: a masked box saves keys to .env and gives Claude a placeholder, every key a tool prints comes back as a placeholder, and committing .env is refused",
-      "version": "0.5.11",
+      "version": "0.5.12",
       "author": {
         "name": "Ray Amjad"
       },
@@ -94,7 +94,7 @@
       "name": "transcript-redactor",
       "source": "./plugins/transcript-redactor",
       "description": "Keeps secrets and email addresses out of the session transcript: swaps each one for a stable placeholder on the way in, and puts the real value back on the way into a tool call",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "author": {
         "name": "Ray Amjad"
       },
