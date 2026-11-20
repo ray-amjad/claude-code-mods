@@ -14,7 +14,7 @@
       "name": "cache-clock",
       "source": "./plugins/cache-clock",
       "description": "A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "author": {
         "name": "Ray Amjad"
       },
@@ -44,7 +44,7 @@
       "name": "dream-pass",
       "source": "./plugins/dream-pass",
       "description": "A dreaming pass over Claude's memory folder: merges duplicates, rewrites stale entries, removes dead ones and tidies MEMORY.md, with a backup and undo",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "author": {
         "name": "Ray Amjad"
       },
@@ -54,7 +54,7 @@
       "name": "jev-skill-suggestion",
       "source": "./plugins/jev-skill-suggestion",
       "description": "Scores every skill against your prompt with TypeSafe Jev as you type; observe, block or steer skill loading",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "author": {
         "name": "Ray Amjad"
       },
@@ -74,7 +74,7 @@
       "name": "prompt-bouncer",
       "source": "./plugins/prompt-bouncer",
       "description": "Bounces vague prompts before Claude sees them, and suggests the project's own term",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Ray Amjad"
       },
@@ -104,7 +104,7 @@
       "name": "vercel-deploy-status",
       "source": "./plugins/vercel-deploy-status",
       "description": "Pins the Vercel deploy queue of the linked project under the prompt: every deploy queued, building or just finished, with its phase and elapsed time",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "author": {
         "name": "Ray Amjad"
       },

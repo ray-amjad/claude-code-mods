@@ -100,6 +100,7 @@ export function parseList(stdout: string): Deployment[] {
   return (body.deployments ?? []).slice().sort((a, b) => b.createdAt - a.createdAt)
 }
 
+// The header line: the project, then the counts that are not zero.
 export function header(project: string, rows: Row[]): string {
   const queued = rows.filter((r) => r.d.state === 'QUEUED').length
   const building = rows.filter((r) => r.d.state !== 'QUEUED' && IN_FLIGHT.has(r.d.state)).length

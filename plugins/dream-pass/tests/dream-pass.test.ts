@@ -147,3 +147,20 @@ test('the memory-write guard matches a Windows path with either separator, witho
   expect(isInside('/home/u/.claude/projects/-p/memory/x.md', '/home/u/.claude/projects/-p/memory')).toBe(true)
   expect(isInside('/home/u/.claude/projects/-p/Memory/x.md', '/home/u/.claude/projects/-p/memory')).toBe(false)
 })
+
+test('parsePlan drops a merge with no source left, and every other edit to a merged file', () => {
+  const files = { 'a.md': memo('a'), 'b.md': memo('b'), 'c.md': memo('c') }
+  const plan = parsePlan(JSON.stringify({
+    merged: [
+      { into: 'a.md', from: ['b.md'], content: 'ab' },
+      { into: 'c.md', from: ['gone.md'], content: 'nothing to merge' },
+    ],
+    rewritten: [{ file: 'b.md', content: 'undo the merge' }, { file: 'c.md', content: 'c2' }],
+    removed: [{ file: 'a.md' }],
+    added: [{ file: 'new.md', content: 'n' }],
+  }), files)
+  expect(plan.merged.map((m: any) => m.into)).toEqual(['a.md'])
+  expect(plan.rewritten.map((w: any) => w.file)).toEqual(['c.md'])
+  expect(plan.removed).toEqual([])
+  expect(plan.added.map((a: any) => a.file)).toEqual(['new.md'])
+})
