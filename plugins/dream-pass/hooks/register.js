@@ -71,7 +71,7 @@ export function register(on, options) {
   on('command.run', { command: 'dream' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'where') $.ui.toast('memory folder: ' + (await memoryDir($, options)))
-    else if (arg === 'undo') await undo($, options)
+    else if (arg === 'undo') await startUndo($, options)
     else if (arg === 'show') await $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 })
     else {
       await launch($, dream($, options, '/dream'))
@@ -106,7 +106,7 @@ export function register(on, options) {
       h(Text, { color: run.status === 'failed' ? 'red' : undefined, dimColor: run.status === 'done' }, text),
       h(Button, { key: 'open', label: 'Open', onPress: () => $.ui.open({ id: PANE, title: 'Dream pass', rows: 18 }) }),
       h(Text, null, ' '),
-      run.status === 'done' && h(Button, { key: 'undo', label: 'Undo', onPress: () => undo($, options) }),
+      run.status === 'done' && h(Button, { key: 'undo', label: 'Undo', onPress: () => startUndo($, options) }),
       run.status === 'done' && h(Text, null, ' '),
       h(Button, { key: 'hide', label: 'Hide', onPress: () => { S.hidden = run.id; $.ui.invalidate('ui.render') } }))
     return below ? h(Box, { flexDirection: 'column' }, band, below) : band
@@ -307,13 +307,25 @@ export function parsePlan(text, files) {
   let json
   try { json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) } catch { return null }
   const ok = (n) => safeName(n) && n !== 'MEMORY.md'
+  // apply runs merges first, each deleting its sources: a merge that touches a file an
+  // earlier merge touched, or a later edit of a merged file, would undo that merge
+  const inMerge = new Set()
+  const merged = (json.merged || []).filter((m) => ok(m.into) && typeof m.content === 'string')
+    .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) }))
+    // A merge with no source left would overwrite `into` and record no change
+    .filter((m) => m.from.length > 0)
+    .filter((m) => {
+      const touched = [m.into, ...m.from]
+      if (touched.some((f) => inMerge.has(f))) return false
+      touched.forEach((f) => inMerge.add(f))
+      return true
+    })
   return {
-    merged: (json.merged || []).filter((m) => ok(m.into) && typeof m.content === 'string')
-      .map((m) => ({ ...m, from: (m.from || []).filter((f) => ok(f) && f !== m.into && f in files) })),
-    rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && typeof w.content === 'string'),
-    removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files),
+    merged,
+    rewritten: (json.rewritten || []).filter((w) => ok(w.file) && w.file in files && !inMerge.has(w.file) && typeof w.content === 'string'),
+    removed: (json.removed || []).filter((d) => ok(d.file) && d.file in files && !inMerge.has(d.file)),
     // New memories only: an "added" file that already exists is ignored
-    added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && typeof a.content === 'string'),
+    added: (json.added || []).filter((a) => ok(a.file) && !(a.file in files) && !inMerge.has(a.file) && typeof a.content === 'string'),
     index: typeof json.index === 'string' && json.index.trim() ? json.index.trim() + '\n' : null,
   }
 }
@@ -355,7 +367,11 @@ async function apply($, dir, files, plan, stamp, why) {
     await $.fs.write(dir + '/' + name, linked)
     if (name !== 'MEMORY.md') changes.push({ kind: 'links', file: name, why: 'links now point at the merged file' })
   }
-  if (plan.index) plan.index = dropDeadPointers(plan.index, await readMemory($, dir))
+  if (plan.index) {
+    const now = await readMemory($, dir)
+    // The old rows come from MEMORY.md as it is now, with its links already redirected
+    plan.index = keepListed(dropDeadPointers(plan.index, now), now['MEMORY.md'] ?? files['MEMORY.md'] ?? '', now)
+  }
   if (plan.index && plan.index.trim() !== files['MEMORY.md'].trim()) {
     await $.fs.write(dir + '/MEMORY.md', plan.index)
     changes.push({ kind: 'index', file: 'MEMORY.md', why: plan.index.trim().split('\n').length + ' lines' })
@@ -374,6 +390,26 @@ export function dropDeadPointers(index, files) {
   }).join('\n')
 }
 
+// A memory the old index listed and the new one forgot keeps its old line. The plan's
+// index can't know which of its edits were dropped (an overlapping merge, say), so a
+// file that survived one of them would otherwise fall out of the index
+export function keepListed(index, oldIndex, files) {
+  const linked = new Set([...index.matchAll(new RegExp(LINK, 'g'))].map((m) => m[1]))
+  const lost = oldIndex.split('\n').filter((line) => {
+    const m = line.match(LINK)
+    if (!m || linked.has(m[1]) || !(m[1] in files)) return false
+    linked.add(m[1])
+    return true
+  })
+  return lost.length ? index.replace(/\n*$/, '\n') + lost.join('\n') + '\n' : index
+}
+
+// Undo from the command or the band: a failure is said, never left unhandled
+const startUndo = ($, options) => undo($, options).catch((err) => {
+  $.ui.log('undo failed: ' + err.message)
+  $.ui.toast('dream undo failed, memory may be half restored: ' + err.message)
+})
+
 // Put the newest backup back: its files return, files it didn't have go away
 async function undo($, options) {
   const dir = await memoryDir($, options)
@@ -389,11 +425,12 @@ async function undo($, options) {
   for (const [name, text] of Object.entries(saved)) await $.fs.write(dir + '/' + name, text)
   // Retire the used backup, so a second undo goes one dream further back
   const [from, to] = [root + '/' + stamp, root + '/undone-' + stamp]
-  await runJob($, 'rename', from, to)
+  const retired = (await runJob($, 'rename', from, to)).exitCode === 0
+  const note = 'restored the backup from ' + stamp + (retired ? '' : ', but could not retire it: the next undo restores it again')
   const run = S.runs.findLast((r) => r.stamp === stamp)
-  if (run) finish($, run, { status: 'undone', note: 'restored the backup from ' + stamp })
-  else addRun($, { why: 'undo', status: 'undone', note: 'restored the backup from ' + stamp })
-  $.ui.toast('restored the memory from ' + stamp)
+  if (run) finish($, run, { status: 'undone', note })
+  else addRun($, { why: 'undo', status: 'undone', note })
+  $.ui.toast(retired ? 'restored the memory from ' + stamp : 'restored the memory from ' + stamp + ', but the backup could not be retired')
 }
 
 // ---------- evidence from past sessions ----------

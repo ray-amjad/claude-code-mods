@@ -39,8 +39,9 @@ export function pickAction(envAction, envAutoHandoff, setting) {
 
 async function loadConfig($, options) {
   const main = await $.env.get('CACHE_CLOCK_MAIN_TTL_MIN')
-  cfg.mainTtl = minutes(main, DEFAULT_MAIN_TTL_MIN * MIN)
-  cfg.pinned = main !== undefined // a value you set wins over the transcript
+  const pinned = minutes(main, null)
+  cfg.mainTtl = pinned ?? DEFAULT_MAIN_TTL_MIN * MIN
+  cfg.pinned = pinned !== null // a valid value you set wins over the transcript
   cfg.subTtl = minutes(await $.env.get('CACHE_CLOCK_SUB_TTL_MIN'), DEFAULT_SUB_TTL_MIN * MIN)
   cfg.warn = minutes(await $.env.get('CACHE_CLOCK_WARN_MIN'), DEFAULT_WARN_MIN * MIN)
   cfg.sound = (await $.env.get('CACHE_CLOCK_SOUND')) === '1'
@@ -65,16 +66,18 @@ async function readTtl($) {
   }
 }
 
-// The transcript's last 300 rows. A long session's transcript is past the
+const TAIL_ROWS = 300
+
+// The transcript's last TAIL_ROWS rows. A long session's transcript is past the
 // 4 MiB $.fs.read takes, so a command reads its end: `tail` on Mac and Linux,
 // PowerShell on Windows, which has no tail (the path goes in an env var, not
 // the script). If the command fails, $.fs.read is the last resort.
 export function tailCommand(isWindows, path) {
-  if (!isWindows) return [['tail', '-n', '300', path], {}]
+  if (!isWindows) return [['tail', '-n', String(TAIL_ROWS), path], {}]
   const script =
     '$r = New-Object IO.StreamReader((New-Object IO.FileStream($env:CACHE_CLOCK_FILE, "Open", "Read", "ReadWrite")), [Text.Encoding]::UTF8); ' +
     '$q = New-Object System.Collections.Generic.Queue[string]; ' +
-    'while ($null -ne ($l = $r.ReadLine())) { $q.Enqueue($l); if ($q.Count -gt 300) { [void]$q.Dequeue() } }; ' +
+    'while ($null -ne ($l = $r.ReadLine())) { $q.Enqueue($l); if ($q.Count -gt ' + TAIL_ROWS + ') { [void]$q.Dequeue() } }; ' +
     '$b = [Text.Encoding]::UTF8.GetBytes(($q -join "`n") + "`n"); [Console]::OpenStandardOutput().Write($b, 0, $b.Length)'
   return [['powershell', '-NoProfile', '-NonInteractive', '-Command', script], { env: { CACHE_CLOCK_FILE: path } }]
 }
@@ -82,9 +85,9 @@ async function lastRows($, path) {
   try {
     const [argv, init] = tailCommand((await $.env.get('OS')) === 'Windows_NT', path)
     const r = await $.process.run(argv, init)
-    if (r.exitCode === 0) return lastLines(r.stdout, 300)
+    if (r.exitCode === 0) return lastLines(r.stdout, TAIL_ROWS)
   } catch {}
-  return lastLines(await $.fs.read(path).catch(() => ''), 300)
+  return lastLines(await $.fs.read(path).catch(() => ''), TAIL_ROWS)
 }
 
 // The last n lines of a file's text, CRLF or LF

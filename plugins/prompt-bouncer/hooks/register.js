@@ -16,6 +16,8 @@ const BARE_PRONOUN = /\b(it|that|this|them|those)\b/i
 // or a Capitalized Name past the first word ("the Billing Panel")
 const ANCHOR = /[\w-]+\.[a-z]{1,5}\b|\/[\w.-]+|`[^`]+`|"[^"]+"|\b[A-Z][a-z]+[A-Z]\w*|\b\w+_\w+\b|\s[A-Z][a-z]{2,}/
 
+const MODES = ['quick', 'project', 'off']
+
 // Session overrides, set by /bouncer (they reset when the mod reloads)
 let modeOverride = null
 let bounces = 0
@@ -28,7 +30,7 @@ export function register(on, options) {
     headless = e.isInteractive === false
     if (!headless) $.ui.status((await currentMode($, options)) + ' mode')
     try {
-      await $.command.register({ name: 'bouncer', description: 'Show prompt-bouncer, or switch it: /bouncer quick|project|off', argumentHint: '[quick|project|off]' })
+      await $.command.register({ name: 'bouncer', description: `Show prompt-bouncer, or switch it: /bouncer ${MODES.join('|')}`, argumentHint: `[${MODES.join('|')}]` })
       await $.command.register({ name: 'force', description: 'Send a prompt past prompt-bouncer', argumentHint: '<prompt>' })
     } catch (err) {
       $.ui.log('could not register commands: ' + err.message)
@@ -72,7 +74,7 @@ export function register(on, options) {
   // /bouncer shows the mode and the docs it reads; /bouncer quick|project|off switches
   on('command.run', { command: 'bouncer' }, async ($, e) => {
     const arg = e.args.trim()
-    if (arg === 'quick' || arg === 'project' || arg === 'off') {
+    if (MODES.includes(arg)) {
       modeOverride = arg
       if (!headless) $.ui.status(arg + ' mode')
     }
@@ -94,7 +96,7 @@ export function register(on, options) {
 
 // The mode: /bouncer override, then PROMPT_BOUNCER_MODE, then /config
 async function currentMode($, options) {
-  return modeOverride || (await $.env.get('PROMPT_BOUNCER_MODE')) || options.mode || 'quick'
+  return [modeOverride, await $.env.get('PROMPT_BOUNCER_MODE'), options.mode].find((m) => MODES.includes(m)) ?? 'quick'
 }
 
 // Quick mode: no model, just patterns. Short + vague + nothing named = bounce.
@@ -147,7 +149,7 @@ async function projectGate($, text, isFirst, docs) {
 
 // Read the project's docs with $.fs: plain paths, or folder/*.md for every match in one folder
 async function loadDocs($, options) {
-  const root = await $.session.cwd()
+  const root = (await $.session.root().catch(() => '')) || (await $.session.cwd())
   const max = options.maxDocChars || 20000
   const files = []
   let text = ''

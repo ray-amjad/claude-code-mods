@@ -103,7 +103,7 @@ export function parseList(stdout: string): Deployment[] {
 // The header line: the project, then the counts that are not zero.
 export function header(project: string, rows: Row[]): string {
   const queued = rows.filter((r) => r.d.state === 'QUEUED').length
-  const building = rows.filter((r) => r.d.state === 'BUILDING' || r.d.state === 'INITIALIZING').length
+  const building = rows.filter((r) => r.d.state !== 'QUEUED' && IN_FLIGHT.has(r.d.state)).length
   const done = rows.length - queued - building
   const counts = [
     building > 0 ? `${building} building` : '',

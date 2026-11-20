@@ -1,6 +1,6 @@
 {
   "name": "dream-pass",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A dreaming pass over Claude's memory folder: merges duplicates, rewrites stale entries, removes dead ones and tidies MEMORY.md, with a backup and undo",
   "author": { "name": "Ray Amjad", "url": "https://github.com/ray-amjad" },
   "repository": "https://github.com/ray-amjad/claude-code-mods/tree/main/plugins/dream-pass",

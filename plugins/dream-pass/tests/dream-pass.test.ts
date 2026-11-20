@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  commandFor, conversationSince, isInside, dropDeadPointers, indexProblems, keywords, originIds, parentDir, parsePlan, redirectLinks,
+  commandFor, conversationSince, isInside, keepListed, dropDeadPointers, indexProblems, keywords, originIds, parentDir, parsePlan, redirectLinks,
   safeName, snippets, summary, suspects, userRows,
 } from '../hooks/register.js'
 
@@ -146,4 +146,29 @@ test('the memory-write guard matches a Windows path with either separator, witho
   expect(isInside('C:\\Users\\U\\.claude\\projects\\C--p\\memory-other\\x.md', dir)).toBe(false)
   expect(isInside('/home/u/.claude/projects/-p/memory/x.md', '/home/u/.claude/projects/-p/memory')).toBe(true)
   expect(isInside('/home/u/.claude/projects/-p/Memory/x.md', '/home/u/.claude/projects/-p/memory')).toBe(false)
+})
+
+test('parsePlan drops a merge with no source left, and every other edit to a merged file', () => {
+  const files = { 'a.md': memo('a'), 'b.md': memo('b'), 'c.md': memo('c') }
+  const plan = parsePlan(JSON.stringify({
+    merged: [
+      { into: 'a.md', from: ['b.md'], content: 'ab' },
+      { into: 'c.md', from: ['gone.md'], content: 'nothing to merge' },
+    ],
+    rewritten: [{ file: 'b.md', content: 'undo the merge' }, { file: 'c.md', content: 'c2' }],
+    removed: [{ file: 'a.md' }],
+    added: [{ file: 'new.md', content: 'n' }],
+  }), files)
+  expect(plan.merged.map((m: any) => m.into)).toEqual(['a.md'])
+  expect(plan.rewritten.map((w: any) => w.file)).toEqual(['c.md'])
+  expect(plan.removed).toEqual([])
+  expect(plan.added.map((a: any) => a.file)).toEqual(['new.md'])
+})
+
+test('a memory the new index forgot keeps its old index line; a deleted one does not', () => {
+  const old = '# Feedback\n- [a](a.md) - about a\n- [b](b.md) - about b\n- [c](c.md) - about c\n'
+  const files = { 'MEMORY.md': old, 'a.md': memo('a'), 'c.md': memo('c') }
+  // The plan merged a.md into c.md, but that merge was dropped: a.md is still there
+  expect(keepListed('# Feedback\n- [c](c.md) - a and c\n', old, files)).toBe('# Feedback\n- [c](c.md) - a and c\n- [a](a.md) - about a\n')
+  expect(keepListed('- [a](a.md) - a\n- [c](c.md) - c\n', old, files)).toBe('- [a](a.md) - a\n- [c](c.md) - c\n')
 })
