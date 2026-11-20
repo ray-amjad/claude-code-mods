@@ -195,6 +195,7 @@ const BOX = {
   round: { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│', out: '┬' },
   double: { tl: '╔', tr: '╗', bl: '╚', br: '╝', h: '═', v: '║', out: '╤' },
 }
+export const corner = box => BOX[box].tl
 // A connector cell remembers which way its lines go: up, down, left, right
 const U = 1, D = 2, L = 4, R = 8
 const JOIN = { [U | D]: '│', [L | R]: '─', [D | R]: '┌', [D | L]: '┐', [U | R]: '└', [U | L]: '┘',
@@ -281,7 +282,6 @@ export function drawGraph(graph, width) {
 
 // Longest-path layers, after dropping the edges that close a cycle
 function layers(nodes, edges) {
-  const out = new Map(nodes.map(n => [n.id, []]))
   const state = new Map()
   const forward = []
   const visit = id => {
@@ -294,7 +294,6 @@ function layers(nodes, edges) {
     state.set(id, 2)
   }
   nodes.forEach(n => { if (!state.get(n.id)) visit(n.id) })
-  forward.forEach(e => out.get(e.from).push(e.to))
   const layer = new Map(nodes.map(n => [n.id, 0]))
   for (let pass = 0; pass < nodes.length; pass++) {
     let moved = false

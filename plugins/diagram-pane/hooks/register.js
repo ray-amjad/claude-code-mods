@@ -13,24 +13,39 @@
 //
 // Claude learns what the pane shows only through those two tools.
 
-import { findDiagrams, parseMermaid, drawGraph, short } from './draw.js'
-import { adoptIds, allIds, applyOps, boxOf, carrySubs, cleanId, levelAt, setLevel, toMermaid, uniqueIds } from './graph.js'
+import { corner, findDiagrams, parseMermaid, drawGraph, short } from './draw.js'
+import { adoptIds, allIds, applyOps, boxOf, carrySubs, cleanId, KINDS, levelAt, OPS, setLevel, toMermaid, uniqueIds } from './graph.js'
 
 const PANE = 'diagrams'
-const TOOL_GET = 'mcp__diagram-pane__diagram_get'
-const TOOL_SET = 'mcp__diagram-pane__diagram_set'
+const openPane = ($, extra = {}) => $.ui.open({ id: PANE, title: 'Diagrams', ...extra })
+const ensurePane = async $ => {
+  if (!(await $.ui.panes()).some(p => p.id === PANE)) await openPane($)
+}
+// A message the user typed, not a tool result coming back
+const isPrompt = m => m.role === 'user' && m.text && !m.toolResults?.length
+// A pin's number, as diagram_get lists it and diagram_set's "pin:N" names it
+const pinNumber = pin => S.pins.indexOf(pin) + 1
+
+// The engine names a mod's tool mcp__<plugin name>__<tool name>
+const GET = 'diagram_get'
+const SET = 'diagram_set'
+const TOOL_GET = `mcp__diagram-pane__${GET}`
+const TOOL_SET = `mcp__diagram-pane__${SET}`
+const DEFAULT_EVERY = 3
+// Boxes 1 to KEYED get a number key in the pane
+const KEYED = 9
+const DEFAULT_MAX_PINS = 5
 const HOME = { root: 'map', path: [] }
 const NOTE = 'The map is drawn after a few turns, or now with /diagram'
 // Set at each session.start; true for -p / SDK sessions
 let headless = false
 
-// Everything the pane shows. Pins are rebuilt from the transcript; the map, the
-// edited pins and the view are also saved in $.store.
-const S = {
+// What belongs to one session id: its map, pins and view. Pins are rebuilt from
+// the transcript; the map, the edited pins and the view are also saved in $.store.
+const sessionState = () => ({
   pins: [],          // [{ kind, code, title, graph, turn, edited }], newest first
   seen: new Set(),   // the code of every diagram pinned so far, to skip repeats
   scanned: 0,        // how many transcript messages we already looked at
-  turn: 0,           // prompts the user has sent in this session
   sinceMap: 0,       // turns since the gate last ran
   map: null,         // { title, graph, turn, edited } from the last fork or edit
   mapAt: 0,          // transcript length when the map was drawn
@@ -39,9 +54,15 @@ const S = {
   loading: new Set(),// views whose detail a fork is drawing
   loaded: false,     // the saved map has been read
   caughtUp: false,   // the one early map draw for a session with work but no map was tried
-  maxPins: 5,
-  every: 3,          // turns between map checks (everyTurns, or DIAGRAM_PANE_EVERY)
   note: NOTE,
+})
+
+// Everything the pane shows. The fields after the session's own outlive a /clear.
+const S = {
+  ...sessionState(),
+  turn: 0,           // prompts the user has sent in this process
+  maxPins: DEFAULT_MAX_PINS,
+  every: DEFAULT_EVERY, // turns between map checks (everyTurns, or DIAGRAM_PANE_EVERY)
   busy: false,       // a gate or fork is running
   sessionId: null,   // the session the state above belongs to
   gen: 0,            // bumped when a new session starts, so late forks drop their reply
@@ -51,29 +72,24 @@ const S = {
 // /clear keeps the process (session.start does not fire) but starts a new
 // session id: drop the old session's map, pins and view
 function startSession(id) {
-  if (S.sessionId !== null && S.sessionId !== id) {
-    Object.assign(S, {
-      pins: [], seen: new Set(), scanned: 0, sinceMap: 0, map: null, mapAt: 0,
-      edits: {}, view: HOME, loading: new Set(), loaded: false, caughtUp: false, note: NOTE, gen: S.gen + 1,
-    })
-  }
+  if (S.sessionId !== null && S.sessionId !== id) Object.assign(S, sessionState(), { gen: S.gen + 1 })
   const changed = S.sessionId !== id
   S.sessionId = id
   return changed
 }
 
 export function register(on, options) {
-  const every = Number(options?.everyTurns) || 3
+  const every = Number(options?.everyTurns) || DEFAULT_EVERY
   S.every = every
-  S.maxPins = Number(options?.maxPins) || 5
+  S.maxPins = Number(options?.maxPins) || DEFAULT_MAX_PINS
 
   on('session.start', async ($, e, next) => {
-    // Set at each session.start. In -p / SDK sessions there is no pane to draw into
+    // In -p / SDK sessions there is no pane to draw into
     headless = e.isInteractive === false
     if (headless) return next(e)
     // Open the pane right away. Unasked, it is placed on a wide terminal (144+ columns);
     // /diagram opens it at any width.
-    await $.ui.open({ id: PANE, title: 'Diagrams' })
+    await openPane($)
     try {
       await $.command.register({ name: 'diagram', description: 'Redraw the live work map in the diagram pane', argumentHint: '[force|open]' })
     } catch (err) {
@@ -97,7 +113,7 @@ export function register(on, options) {
     if ((headless && !asked) || e.agentId || e.isAborted) return result
     const messages = await sync($)
     S.sinceMap += 1
-    if (!headless && S.pins.length && !(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: 'Diagrams' })
+    if (!headless && S.pins.length) await ensurePane($)
     S.every = Number(await $.env.get('DIAGRAM_PANE_EVERY')) || every
     if (S.sinceMap >= S.every || overdue()) {
       const work = overdue() ? catchUp($, messages) : refreshMap($, messages, false)
@@ -112,7 +128,7 @@ export function register(on, options) {
   // from scratch; /diagram open gives the pane the keyboard, so number keys work
   on('command.run', { command: 'diagram' }, async ($, e) => {
     const arg = e.args.trim()
-    await $.ui.open({ id: PANE, title: 'Diagrams', ...(arg === 'open' ? { focus: true } : {}) })
+    await openPane($, arg === 'open' ? { focus: true } : {})
     const messages = await sync($)
     if (arg === 'open') {
       await redraw($)
@@ -137,7 +153,7 @@ export function register(on, options) {
       await sync($)
       const text = setDiagram(resolveTarget(String(e.target || 'view')), e)
       await saveSaved($)
-      if (!(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: 'Diagrams' })
+      await ensurePane($)
       await redraw($)
       return { result: text }
     } catch (err) {
@@ -192,7 +208,7 @@ async function sync($) {
 
 // A turn is a prompt the user typed (tool results also arrive as user messages)
 function turnsIn(messages) {
-  return messages.filter(m => m.role === 'user' && m.text && !m.toolResults?.length).length
+  return messages.filter(isPrompt).length
 }
 
 function pinNewDiagrams(messages, maxPins) {
@@ -223,7 +239,7 @@ const GATE_SYSTEM = 'You watch a coding agent so a small diagram of its work sta
 
 const SIDE = '[diagram-pane side request: not from the user. Do not continue the task and do not call tools.]'
 
-const JSON_SHAPE = `{"title":"what it is, max 40 chars","nodes":[{"id":"a","label":"max 20 chars","kind":"file|component|step","now":false}],"edges":[{"from":"a","to":"b","label":"optional, max 10 chars"}]}`
+const JSON_SHAPE = `{"title":"what it is, max 40 chars","nodes":[{"id":"a","label":"max 20 chars","kind":"${KINDS.join('|')}","now":false}],"edges":[{"from":"a","to":"b","label":"optional, max 10 chars"}]}`
 
 const FORK_PROMPT = `${SIDE}
 Draw a compact map of the work in this session right now: the files, components and steps involved, and how they connect.
@@ -274,17 +290,8 @@ async function refreshMap($, messages, force) {
     const edits = S.mapEdits
     S.note = 'fork: drawing the work map...'
     await redraw($)
-    const r = await $.model.fork({ prompt: FORK_PROMPT + (base ? basePrompt(base) : '') })
-    if (gen !== S.gen) return // /clear ran meanwhile: this map is the old session's
-    if (!r.isAnswered) {
-      S.note = r.reason === 'nothing-to-fork' ? 'nothing to map yet: send a prompt first' : 'fork failed: ' + r.reason
-      return
-    }
-    const map = parseMap(r.text)
-    if (!map) {
-      S.note = 'fork reply was not a graph: ' + short(r.text.replace(/\s+/g, ' '), 60)
-      return
-    }
+    const map = await forkGraph($, FORK_PROMPT + (base ? basePrompt(base) : ''), gen, 'map')
+    if (!map) return
     // Someone changed the map while the fork ran: their change wins over a map
     // drawn from what was there before it
     if (S.mapEdits !== edits) {
@@ -369,7 +376,7 @@ export function fileName(path) {
 function digest(messages) {
   const lines = []
   for (const m of messages) {
-    if (m.role === 'user' && m.text && !m.toolResults?.length) lines.push('user: ' + short(m.text.replace(/\s+/g, ' '), 160))
+    if (isPrompt(m)) lines.push('user: ' + short(m.text.replace(/\s+/g, ' '), 160))
     for (const t of m.toolUses || []) {
       const i = t.input || {}
       lines.push(`${t.tool}: ` + short(String(i.file_path || i.path || i.command || i.pattern || i.description || ''), 100))
@@ -394,7 +401,7 @@ const viewKey = view => `${view.root}\u0000${view.code || ''}\u0000${view.path.j
 // The names of the levels down to the view, for the pane's header
 function crumbs(view = S.view) {
   const pin = view.root === 'pin' ? pinOf(view.code) : null
-  const names = [pin ? short(pin.title || `pin ${S.pins.indexOf(pin) + 1}`, 24) : 'Work map']
+  const names = [pin ? short(pin.title || `pin ${pinNumber(pin)}`, 24) : 'Work map']
   let g = rootGraph(view)
   for (const id of view.path) {
     const n = g?.nodes.find(n => n.id === id)
@@ -471,17 +478,8 @@ async function expand($, view) {
   await redraw($)
   const gen = S.gen
   try {
-    const r = await $.model.fork({ prompt: DETAIL_PROMPT(crumbs(parentView).join(' › '), parent, node) })
-    if (gen !== S.gen) return
-    if (!r.isAnswered) {
-      S.note = r.reason === 'nothing-to-fork' ? 'nothing to fork yet: send a prompt first' : 'fork failed: ' + r.reason
-      return
-    }
-    const detail = parseMap(r.text)
-    if (!detail) {
-      S.note = 'fork reply was not a graph: ' + short(r.text.replace(/\s+/g, ' '), 60)
-      return
-    }
+    const detail = await forkGraph($, DETAIL_PROMPT(crumbs(parentView).join(' › '), parent, node), gen)
+    if (!detail) return
     // The diagram may have changed while the fork ran: attach only to a box that
     // is still there and still has no detail
     const root = rootGraph(view)
@@ -502,9 +500,29 @@ async function expand($, view) {
 // Changing a diagram: Claude's tools and the pane's own input
 // ---------------------------------------------------------------------------
 
+// A fork of the session asked `prompt`. Null when the reply is the old session's
+// (a /clear ran since `gen`) or there is none; the pane's note then says why.
+async function askFork($, prompt, gen, what = 'fork') {
+  const r = await $.model.fork({ prompt })
+  if (gen !== S.gen) return null
+  if (!r.isAnswered) {
+    S.note = r.reason === 'nothing-to-fork' ? `nothing to ${what} yet: send a prompt first` : 'fork failed: ' + r.reason
+    return null
+  }
+  return r.text
+}
+
+async function forkGraph($, prompt, gen, what) {
+  const text = await askFork($, prompt, gen, what)
+  if (text === null) return null
+  const graph = parseMap(text)
+  if (!graph) S.note = 'fork reply was not a graph: ' + short(text.replace(/\s+/g, ' '), 60)
+  return graph
+}
+
 const TOOLS = [
   {
-    name: 'diagram_get',
+    name: GET,
     description:
       "Read what the user's diagram side pane shows: the live work map, the diagrams pinned from your replies, and which box " +
       'the user has opened. Each comes back as mermaid with stable node ids; a subgraph is a box with a detail diagram inside ' +
@@ -514,7 +532,7 @@ const TOOLS = [
     isDeferred: false,
   },
   {
-    name: 'diagram_set',
+    name: SET,
     description:
       "Change a diagram in the user's side pane. target: \"view\" (what the user is looking at; the default), \"map\" " +
       '(the live work map) or "pin:N" (a pinned diagram, N as diagram_get lists it). path: node ids to go down through ' +
@@ -534,10 +552,10 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              op: { type: 'string', enum: ['add_node', 'remove_node', 'relabel', 'set_kind', 'add_edge', 'remove_edge'] },
+              op: { type: 'string', enum: OPS },
               id: { type: 'string' },
               label: { type: 'string' },
-              kind: { type: 'string', enum: ['file', 'component', 'step'] },
+              kind: { type: 'string', enum: KINDS },
               from: { type: 'string' },
               to: { type: 'string' },
             },
@@ -555,7 +573,7 @@ const TOOLS = [
 export function describe() {
   normalizeView()
   const out = [`The pane shows: ${crumbs().join(' › ')}` +
-    (S.view.path.length ? `  (path ${JSON.stringify(S.view.path)} in ${S.view.root === 'map' ? '"map"' : `"pin:${S.pins.indexOf(pinOf(S.view.code)) + 1}"`})` : '')]
+    (S.view.path.length ? `  (path ${JSON.stringify(S.view.path)} in ${S.view.root === 'map' ? '"map"' : `"pin:${pinNumber(pinOf(S.view.code))}"`})` : '')]
   if (S.map) out.push(`\n## map: "${S.map.title}" (turn ${S.map.turn}${S.map.edited ? ', edited' : ''})\n\`\`\`mermaid\n${toMermaid(S.map.graph)}\n\`\`\``)
   else {
     const left = Math.max(1, S.every - S.sinceMap)
@@ -581,7 +599,7 @@ function resolveTarget(target) {
   if (target === 'map') return { ...HOME }
   const m = /^pin:?\s*(\d+)$/i.exec(target)
   if (m) {
-    const pin = S.pins[Number(m[1]) - 1]
+    const pin = S.pins[Number(m[1]) - 1] // pinNumber's inverse
     if (!pin) throw new Error(`no ${target}: there ${S.pins.length === 1 ? 'is 1 pin' : `are ${S.pins.length} pins`}`)
     return { root: 'pin', code: pin.code, path: [] }
   }
@@ -682,18 +700,14 @@ async function editByFork($, text) {
   await redraw($)
   const gen = S.gen
   try {
-    const r = await $.model.fork({ prompt: EDIT_PROMPT(crumbs(view).join(' › '), source, text) })
-    if (gen !== S.gen) return
-    if (!r.isAnswered) {
-      S.note = r.reason === 'nothing-to-fork' ? 'nothing to fork yet: send a prompt first' : 'fork failed: ' + r.reason
-      return
-    }
+    const reply = await askFork($, EDIT_PROMPT(crumbs(view).join(' › '), source, text), gen)
+    if (reply === null) return
     // The chart is in a code fence, or starts at a line of its own that opens with
     // flowchart or graph (never at those words inside the prose before it)
-    const fenced = r.text.match(/```(?:mermaid)?\s*\n([\s\S]*?)```/)
-    const start = r.text.search(/^[ \t]*(flowchart|graph)\b/m)
+    const fenced = reply.match(/```(?:mermaid)?\s*\n([\s\S]*?)```/)
+    const start = reply.search(/^[ \t]*(flowchart|graph)\b/m)
     if (!fenced && start < 0) throw new Error('the reply had no flowchart')
-    const code = fenced ? fenced[1] : r.text.slice(start)
+    const code = fenced ? fenced[1] : reply.slice(start)
     setDiagram({ ...view, path: [] }, { path: view.path, mermaid: code })
     S.note = `changed: ${short(text, 40)}`
     await saveSaved($)
@@ -715,7 +729,7 @@ function marked(graph, keys = true) {
   return {
     nodes: graph.nodes.map((n, i) => ({
       ...n,
-      label: (keys && i < 9 ? `${i + 1}·` : '') + (n.now ? '▶ ' : '') + n.label + (n.sub ? ' ▸' : ''),
+      label: (keys && i < KEYED ? `${i + 1}·` : '') + (n.now ? '▶ ' : '') + n.label + (n.sub ? ' ▸' : ''),
     })),
     edges: graph.edges,
   }
@@ -726,7 +740,7 @@ function marked(graph, keys = true) {
 function nodeButtons(graph, act) {
   return graph.nodes.map((n, i) => ({
     key: 'node:' + n.id,
-    ...(i < 9 ? { hotkey: String(i + 1) } : {}),
+    ...(i < KEYED ? { hotkey: String(i + 1) } : {}),
     label: short(n.label, 16) + (n.sub ? ' ▸' : ''),
     onPress: () => act?.drill(n.id),
   }))
@@ -786,7 +800,7 @@ function paneItems(w, act) {
   if (S.map) {
     add(S.map.title, { bold: true })
     for (const l of drawGraph(marked(S.map.graph), w)) add(l, { color: 'cyan' })
-    add('┌ file  ╭ component  ╔ step  ▶ now  ▸ has detail', { dim: true })
+    add(KINDS.map(k => `${corner(boxOf(k))} ${k}`).join('  ') + '  ▶ now  ▸ has detail', { dim: true })
   }
   add((S.busy ? '… ' : '') + S.note, { dim: true })
   if (S.map) {

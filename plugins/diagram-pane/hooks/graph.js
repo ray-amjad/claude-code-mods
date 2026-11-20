@@ -13,6 +13,7 @@ const KIND_BOX = { file: 'single', component: 'round', step: 'double' }
 
 export const clone = g => JSON.parse(JSON.stringify(g))
 
+export const KINDS = Object.keys(KIND_BOX)
 export const boxOf = kind => KIND_BOX[kind] || 'single'
 
 // Mermaid ids are words; anything else becomes `_`
@@ -57,26 +58,33 @@ export function allIds(g, out = new Set()) {
   return out
 }
 
+// Gives each node of one level (not its subs) an id not in `taken`: a clash
+// becomes `base(id)`, then `base(id)2`, `3` ... The level's edges follow.
+function renameClashes(g, taken, base) {
+  const rename = new Map()
+  for (const n of g.nodes) {
+    if (taken.has(n.id)) {
+      const first = base(n.id)
+      let id = first
+      for (let i = 2; taken.has(id); i++) id = `${first}${i}`
+      rename.set(n.id, id)
+      n.id = id
+    }
+    taken.add(n.id)
+  }
+  for (const e of g.edges) {
+    e.from = rename.get(e.from) || e.from
+    e.to = rename.get(e.to) || e.to
+  }
+}
+
 // Mermaid ids are global, so a detail's ids must not clash with the rest of the
 // tree: clashing ones get `prefix_` in front. `taken` is the rest of the tree's ids.
 export function adoptIds(level, taken, prefix) {
   const out = clone(level)
-  const rename = new Map()
   const walk = g => {
-    for (const n of g.nodes) {
-      if (taken.has(n.id)) {
-        let id = `${cleanId(prefix)}_${n.id}`
-        for (let i = 2; taken.has(id); i++) id = `${cleanId(prefix)}_${n.id}${i}`
-        rename.set(n.id, id)
-        n.id = id
-      }
-      taken.add(n.id)
-      if (n.sub) walk(n.sub)
-    }
-    for (const e of g.edges) {
-      e.from = rename.get(e.from) || e.from
-      e.to = rename.get(e.to) || e.to
-    }
+    renameClashes(g, taken, id => `${cleanId(prefix)}_${id}`)
+    for (const n of g.nodes) if (n.sub) walk(n.sub)
   }
   walk(out)
   return out
@@ -92,21 +100,7 @@ export function uniqueIds(root) {
   while (level.length) {
     const below = []
     for (const { g, prefix } of level) {
-      const rename = new Map()
-      for (const n of g.nodes) {
-        if (taken.has(n.id)) {
-          const base = prefix ? `${cleanId(prefix)}_${n.id}` : n.id
-          let id = base
-          for (let i = 2; taken.has(id); i++) id = `${base}${i}`
-          rename.set(n.id, id)
-          n.id = id
-        }
-        taken.add(n.id)
-      }
-      for (const e of g.edges) {
-        e.from = rename.get(e.from) || e.from
-        e.to = rename.get(e.to) || e.to
-      }
+      renameClashes(g, taken, id => (prefix ? `${cleanId(prefix)}_${id}` : id))
       for (const n of g.nodes) if (n.sub) below.push({ g: n.sub, prefix: n.id })
     }
     level = below
@@ -125,14 +119,17 @@ export function carrySubs(before, after, { sameLabel = false } = {}) {
   return out
 }
 
-// Patch a graph. ops: [{ op, id, label, kind, from, to }], op one of
-// add_node, remove_node, relabel, set_kind, add_edge, remove_edge.
+export const OPS = ['add_node', 'remove_node', 'relabel', 'set_kind', 'add_edge', 'remove_edge']
+
+// Patch a graph. ops: [{ op, id, label, kind, from, to }], op one of OPS.
 // Returns { graph, changes }; throws on an op it cannot apply.
 export function applyOps(graph, ops) {
   const g = clone(graph || { nodes: [], edges: [] })
   const changes = []
+  // An op names a node as written or as add_node cleaned it ("my node" is my_node)
+  const key = id => (g.nodes.some(n => n.id === id) ? id : cleanId(id))
   const find = id => {
-    const n = g.nodes.find(n => n.id === id)
+    const n = g.nodes.find(n => n.id === key(id))
     if (!n) throw new Error(`no node "${id}" (ids: ${g.nodes.map(n => n.id).join(', ') || 'none'})`)
     return n
   }
@@ -160,21 +157,23 @@ export function applyOps(graph, ops) {
         break
       }
       case 'set_kind': {
-        find(o.id).box = boxOf(o.kind)
-        changes.push(`${o.id} is now a ${o.kind}`)
+        const n = find(o.id)
+        n.box = boxOf(o.kind)
+        changes.push(`${n.id} is now a ${o.kind}`)
         break
       }
       case 'add_edge': {
-        find(o.from), find(o.to)
-        g.edges.push({ from: o.from, to: o.to, label: String(o.label || '') })
-        changes.push(`linked ${o.from} → ${o.to}`)
+        const from = find(o.from).id, to = find(o.to).id
+        g.edges.push({ from, to, label: String(o.label || '') })
+        changes.push(`linked ${from} → ${to}`)
         break
       }
       case 'remove_edge': {
+        const from = key(o.from), to = key(o.to)
         const before = g.edges.length
-        g.edges = g.edges.filter(e => !(e.from === o.from && e.to === o.to))
-        if (g.edges.length === before) throw new Error(`no edge ${o.from} → ${o.to}`)
-        changes.push(`unlinked ${o.from} → ${o.to}`)
+        g.edges = g.edges.filter(e => !(e.from === from && e.to === to))
+        if (g.edges.length === before) throw new Error(`no edge ${from} → ${to}`)
+        changes.push(`unlinked ${from} → ${to}`)
         break
       }
       default:

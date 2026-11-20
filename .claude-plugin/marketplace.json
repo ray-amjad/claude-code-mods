@@ -24,7 +24,7 @@
       "name": "decision-tree",
       "source": "./plugins/decision-tree",
       "description": "When Claude ends a reply with a question, explains the choice in a side pane and lets you explore any option, or your own, in a real forked session",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "author": {
         "name": "Ray Amjad"
       },
@@ -34,7 +34,7 @@
       "name": "diagram-pane",
       "source": "./plugins/diagram-pane",
       "description": "A side pane that pins every diagram Claude draws, keeps a live map of the work, and lets you go into boxes and change them",
-      "version": "0.2.6",
+      "version": "0.2.7",
       "author": {
         "name": "Ray Amjad"
       },
