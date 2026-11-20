@@ -114,6 +114,7 @@ Six hooks, one vault.
 - **Files Claude writes get the real value.** A placeholder in a note Claude writes with `Write` or `Edit` lands on disk as the key, and in git if that file is committed.
 - **Base64 is checked up to 1 MB,** and PDFs and zip files (docx, xlsx) are treated as media and not decoded.
 - **Workflow agents.** A workflow agent's prompt can't be rewritten, so one that holds a key is refused, and a false positive stops that step.
+- **Code Mode: what a script builds itself.** With `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`, every call a script makes (Bash, Read, MCP) is scrubbed, but a value the script computes in JavaScript (joined, decoded, `atob`) and returns reaches Claude as it is. Claude Code 2.1.329 gives a mod no hook that can rewrite a script's output. See [docs/code-mode-gap.md](docs/code-mode-gap.md).
 - **The vault is memory only.** Placeholders from an earlier session mean nothing in a new one.
 - Mods only load in a folder you have trusted.
 
