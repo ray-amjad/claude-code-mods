@@ -188,3 +188,29 @@ test('a box with no detail gets one from a fork, kept on the map', async ($, on)
   expect(got).toContain('subgraph web["web.tf"]')
   expect(got).toContain('web_web --> tg')
 })
+
+test('adoptIds keeps a parent edge on its own level when a node inside has the same name', async () => {
+  const level = {
+    nodes: [
+      { id: 'X', label: 'X', kind: 'service' },
+      { id: 'Box', label: 'Box', kind: 'service', sub: { nodes: [{ id: 'X', label: 'inner X', kind: 'service' }], edges: [] } },
+    ],
+    edges: [{ from: 'X', to: 'Box', label: '' }],
+  } as any
+  const out = adoptIds(level, new Set(['Other']), 'p')
+  const top = out.nodes.map((n: any) => n.id)
+  expect(top).toContain(out.edges[0].from)
+  expect(out.nodes[1].sub.nodes[0].id).not.toBe(out.nodes[0].id)
+})
+
+test('diagram_set ops find a node by the name add_node was given', async () => {
+  const { graph } = applyOps({ nodes: [], edges: [] }, [
+    { op: 'add_node', id: 'my node', label: 'My node', kind: 'service' },
+    { op: 'add_node', id: 'db', label: 'DB', kind: 'service' },
+    { op: 'add_edge', from: 'my node', to: 'db' },
+    { op: 'relabel', id: 'my node', label: 'Renamed' },
+  ] as any)
+  expect(graph.nodes.map((n: any) => n.id)).toEqual(['my_node', 'db'])
+  expect(graph.nodes[0].label).toBe('Renamed')
+  expect(graph.edges).toEqual([expect.objectContaining({ from: 'my_node', to: 'db' })])
+})
