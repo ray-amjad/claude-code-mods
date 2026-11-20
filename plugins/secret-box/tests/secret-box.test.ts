@@ -994,3 +994,13 @@ test('a value saved with escaped quotes and backslashes is learned back as itsel
   const out = String((await call($, { tool: 'Bash', command: 'node db.js' })).result)
   expect(out).not.toContain(value)
 })
+
+test('an escaped .env value is hidden both as the file holds it and as it means', async ($, on) => {
+  const value = 'c:\\x ' + WEAK // one real backslash
+  const held = 'c:\\\\x ' + WEAK // the file's text: the backslash escaped
+  stubs(on, { output: `as file: ${held} / as meant: ${value}`, dotenv: `DB_PASSWORD="${held}"\n` })
+  await call($, { tool: 'Read', file_path: '/repo/.env' })
+  const out = String((await call($, { tool: 'Bash', command: "cut -d'\"' -f2 .env" })).result)
+  expect(out).not.toContain(held)
+  expect(out).not.toContain(value)
+})

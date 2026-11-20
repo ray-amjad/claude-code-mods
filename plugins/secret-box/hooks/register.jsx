@@ -245,8 +245,12 @@ async function learnDotenv($, files) {
       const path = isAbsolute(f) ? f : cwd + '/' + f
       if (!(await $.fs.exists(path))) continue
       for (const m of (await $.fs.read(path)).matchAll(ASSIGNMENT)) {
-        const value = unquote(m[3].trim())
-        if (value.length >= 6 && SECRET_NAME.test(m[2])) keepSecret(value)
+        if (!SECRET_NAME.test(m[2])) continue
+        // The value as the file holds it and as it means: a command can print either
+        const raw = m[3].trim()
+        for (const value of new Set([unquote(raw), raw.replace(/^["']|["']$/g, '')])) {
+          if (value.length >= 6) keepSecret(value)
+        }
       }
     } catch {}
   }
