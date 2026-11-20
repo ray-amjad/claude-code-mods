@@ -133,7 +133,7 @@ node --experimental-strip-types test/random-tags.test.mts
 node --experimental-strip-types test/pii-options.test.mts
 ```
 
-`test/detect.test.mts` holds two lists, 186 values that must be hidden and 115 that must be kept, and times the scan on large inputs. A change to a pattern or a threshold is only done when both lists still pass. `tests/redact.test.ts` covers the hooks: restore, scrub and fail closed.
+`test/detect.test.mts` holds two lists, 191 values that must be hidden and 115 that must be kept, and times the scan on large inputs. A change to a pattern or a threshold is only done when both lists still pass. `tests/redact.test.ts` covers the hooks: restore, scrub and fail closed.
 
 Tested with Claude Code 2.1.296.
 

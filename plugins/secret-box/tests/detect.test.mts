@@ -342,7 +342,10 @@ const ROUND_TRIP: string[] = [
   keep('ga cookie', 'Cookie: _ga=GA1.2.1234567890.1700000000')
   keep('word cookie', 'Cookie: theme=dark-mode-v2-enabled')
   keep('transcript session id', `{"sessionId":"${uuid()}","type":"user"}`)
-  // #39: `sid` is a key name, and a session UUID after it is still an id.
+  // #39. The seed is put back after this block, so every fixture after it
+  // is the same as before these cases were added.
+  const seed39 = seed
+  // `sid` is a key name, and a session UUID after it is still an id.
   keep('sid uuid env', `SID=${uuid()}`)
   keep('prefixed sid uuid', `export X_SID=${uuid()}`)
   keep('sid uuid yaml', `sid: ${uuid()}`)
@@ -353,10 +356,23 @@ const ROUND_TRIP: string[] = [
   hide('random sid value', `SID=${g}`, g)
   const h = mixed(32)
   hide('random sid json', `{"sid": "${h}"}`, h)
+  // A `sid` cookie is the session credential, UUID or not.
+  const k = uuid()
+  hide('sid uuid cookie', `Cookie: theme=dark; sid=${k}`, k)
+  const l = uuid()
+  hide('sid uuid set-cookie', `Set-Cookie: sid=${l}; Path=/; HttpOnly`, l)
+  const n = uuid()
+  hide('sid uuid curl cookie', `curl -b "sid=${n}" https://example.org/`, n)
+  // A low-entropy UUID the entropy rule alone lets through (#39 review).
+  const flat = ['1234', '5678'].join('') + '-1234-4567-8912-' + ['3456', '7891', '2345'].join('')
+  hide('low-entropy sid uuid cookie', `Cookie: sid=${flat}`, flat)
+  const flat2 = ['aaaa', '1111'].join('') + '-bbbb-2222-cccc-' + ['3333', 'dddd', '4444'].join('')
+  hide('low-entropy uuid in cookies.txt', `.example.org\tTRUE\t/\tTRUE\t0\tsession_token\t${flat2}`, flat2)
   const i = uuid()
   hide('uuid after a key name', `API_KEY=${i}`, i)
   const j = uuid()
   hide('quoted uuid pair after a key name', `echo "API_KEY=${j}"`, j)
+  seed = seed39
 }
 
 // 19. A named key with word parts in front.
