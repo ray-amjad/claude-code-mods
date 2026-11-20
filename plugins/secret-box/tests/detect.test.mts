@@ -342,6 +342,21 @@ const ROUND_TRIP: string[] = [
   keep('ga cookie', 'Cookie: _ga=GA1.2.1234567890.1700000000')
   keep('word cookie', 'Cookie: theme=dark-mode-v2-enabled')
   keep('transcript session id', `{"sessionId":"${uuid()}","type":"user"}`)
+  // #39: `sid` is a key name, and a session UUID after it is still an id.
+  keep('sid uuid env', `SID=${uuid()}`)
+  keep('prefixed sid uuid', `export X_SID=${uuid()}`)
+  keep('sid uuid yaml', `sid: ${uuid()}`)
+  keep('sid uuid json', `{"sid":"${uuid()}"}`)
+  keep('quoted sid uuid pair', `echo "SID=${uuid()}"`)
+  keep('quoted session_id uuid pair', `run('X_SESSION_ID=${uuid()}')`)
+  const g = lowerDigit(32)
+  hide('random sid value', `SID=${g}`, g)
+  const h = mixed(32)
+  hide('random sid json', `{"sid": "${h}"}`, h)
+  const i = uuid()
+  hide('uuid after a key name', `API_KEY=${i}`, i)
+  const j = uuid()
+  hide('quoted uuid pair after a key name', `echo "API_KEY=${j}"`, j)
 }
 
 // 19. A named key with word parts in front.

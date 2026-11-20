@@ -950,8 +950,15 @@ function lettersLookRandom(token: string, named: boolean, h: number): boolean {
 // Claude Code transcripts and most analytics put a `sessionId` UUID on every
 // line. A UUID beside that name is an identifier, not a credential; a real
 // session cookie is random text, and the cookie rules hide it on their own.
+// `sid` is short for a session id (`SID=`, `X_SID=`, `"sid":`), so it is let
+// through too; `rsid` or `psid` is not. A bare `session` name is not: there
+// the value is the session itself, often a cookie.
 const SESSION_UUID = new RegExp(`^${UUID}$`, 'i')
-const SESSION_ID_NAME = new RegExp(String.raw`sess(?:ion)?[_-]?id(?:${Q}|\s){0,6}[:=]{1,2}(?:${Q}|\s){0,4}$`, 'i')
+const SESSION_ID_NAME_SRC = String.raw`(?:sess(?:ion)?[_-]?id|(?<![A-Za-z])sid)(?:${Q}|\s){0,6}[:=]{1,2}(?:${Q}|\s){0,4}`
+const SESSION_ID_NAME = new RegExp(`${SESSION_ID_NAME_SRC}$`, 'i')
+// The same pair inside one quoted string (`"SID=<uuid>"`), which the quoted
+// generated-password rule would otherwise take whole.
+const QUOTED_SESSION_ID = new RegExp(`^[\\w-]*?${SESSION_ID_NAME_SRC}${UUID}$`, 'i')
 
 function looksSecret(token: string, before: string, cfg: Config): boolean {
   if (token.startsWith('REDACTED-')) return false
@@ -1166,7 +1173,7 @@ function scrubAssignments(text: string, cfg: Config): string {
   }
   if (PW_SYMBOL.test(out)) {
     out = out.replace(QUOTED_VALUE, (m, q: string, v: string, offset: number, whole: string) => {
-      if (!looksGenerated(v) || isStandIn(v) || cfg.allow.has(v)) return m
+      if (!looksGenerated(v) || isStandIn(v) || cfg.allow.has(v) || QUOTED_SESSION_ID.test(v)) return m
       // A MIME boundary is random by design and public.
       if (/boundary=$/i.test(whole.slice(Math.max(0, offset - 9), offset))) return m
       return q + mint('SECRET', v) + q
