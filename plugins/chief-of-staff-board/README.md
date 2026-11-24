@@ -2,6 +2,8 @@
 
 A side pane for the one session you talk to while other agents do the work.
 
+![chief-of-staff-board in a session: on the left the coordinator says three things need you and it handled the rest, and "Board refund: yes" is typed in the prompt; on the right the Board pane lists Waiting on you with three items, each with a note and Open and Answer buttons, then Ready for review, Working and Handled for you; below, the four steps: one session reads the threads, it keeps board.json, the pane shows the file, you reply by id](screenshot.png)
+
 When you run many agent threads at once (in Slack, on PRs, in other
 sessions), reading them all becomes the job. The way out is a coordinator: one
 session that watches the threads, answers what it can on your behalf, and
