@@ -7,7 +7,7 @@
   },
   "metadata": {
     "description": "Ray Amjad's Claude Code mods: panes, bands, prompt guards and memory tools, each one installable on its own.",
-    "version": "2.1.0"
+    "version": "2.2.0"
   },
   "plugins": [
     {
@@ -15,6 +15,16 @@
       "source": "./plugins/cache-clock",
       "description": "A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold",
       "version": "0.5.5",
+      "author": {
+        "name": "Ray Amjad"
+      },
+      "license": "MIT"
+    },
+    {
+      "name": "chief-of-staff-board",
+      "source": "./plugins/chief-of-staff-board",
+      "description": "A side pane for a coordinator session: what is waiting on you, ready for review, in flight and handled, drawn from a JSON file your coordinator agent keeps current",
+      "version": "0.1.0",
       "author": {
         "name": "Ray Amjad"
       },

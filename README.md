@@ -24,6 +24,7 @@ Answer `y` to add the marketplace, then pick a scope. Or add the marketplace onc
 | Mod | What it does |
 | --- | --- |
 | [cache-clock](plugins/cache-clock) | A one-line band above the prompt: context used, and a countdown until the prompt cache goes cold. |
+| [chief-of-staff-board](plugins/chief-of-staff-board) | A side pane for a coordinator session: what is waiting on you, ready for review, in flight and handled, drawn from a JSON file your coordinator agent keeps current. |
 | [decision-tree](plugins/decision-tree) | When Claude ends a reply with a question, explains the choice in a side pane and lets you explore any option, or your own, in a real forked session. |
 | [diagram-pane](plugins/diagram-pane) | A side pane that pins every diagram Claude draws, keeps a live map of the work, and lets you go into boxes and change them. |
 | [dream-pass](plugins/dream-pass) | A dreaming pass over Claude's memory folder: merges duplicates, rewrites stale entries, removes dead ones and tidies MEMORY.md, with a backup and undo. |
