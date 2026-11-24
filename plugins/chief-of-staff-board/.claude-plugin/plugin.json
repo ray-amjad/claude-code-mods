@@ -1,0 +1,39 @@
+{
+  "name": "chief-of-staff-board",
+  "version": "0.1.0",
+  "description": "A side pane for a coordinator session: what is waiting on you, ready for review, in flight and handled, drawn from a JSON file your coordinator agent keeps current",
+  "author": {
+    "name": "Ray Amjad",
+    "url": "https://github.com/ray-amjad"
+  },
+  "repository": "https://github.com/ray-amjad/claude-code-mods/tree/main/plugins/chief-of-staff-board",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "keywords": [
+    "coordinator",
+    "chief-of-staff",
+    "pane",
+    "ui",
+    "function-hooks"
+  ],
+  "userConfig": {
+    "boardFile": {
+      "type": "string",
+      "title": "Board file",
+      "description": "Path of the board JSON file. Empty: board.json in the folder the session starts in. ~/ is your home folder",
+      "default": ""
+    },
+    "slackTeamId": {
+      "type": "string",
+      "title": "Slack team id",
+      "description": "Your Slack workspace id (starts with T). When set, Slack links open in the Slack app at the thread instead of the browser",
+      "default": ""
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Re-read every (seconds)",
+      "description": "How often the pane re-reads the board file",
+      "default": 5
+    }
+  }
+}
